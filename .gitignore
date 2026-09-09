@@ -1,0 +1,25 @@
+.venv/
+
+# Environment variables and secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python caches and test artifacts
+**/__pycache__/
+*.py[cod]
+**/.pytest_cache/
+
+# Runtime data and local databases
+**/instance/
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+**/uploads/
+**/backups/
+*.log
+
+# Generated resident documents
+barangay_system/static/permits/*.pdf
