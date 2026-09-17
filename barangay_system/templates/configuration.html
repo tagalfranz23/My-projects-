@@ -1,1 +1,177 @@
-{% extends 'base.html' %}{% block page_title %}System Configuration{% endblock %}{% block content %}<div class="page-head"><div><span class="eyebrow">Administrator only</span><h1>System Configuration</h1><p class="muted">Manage authorized service catalogs and receipt processing guidance.</p></div></div><div class="grid-2"><section class="card"><h2>Permit Types</h2><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="kind" value="permit"><div class="field"><label>Name</label><input name="name" required></div><div class="field"><label>Description</label><textarea name="description"></textarea></div><div class="field"><label>Requirements / What to Bring</label><textarea name="requirements"></textarea></div><div class="field"><label>Fee</label><input type="number" name="fee" min="0" step=".01"></div><button class="btn btn-primary" type="submit">Add Permit Type</button></form>{% for r in permit_types %}<div class="kv"><span>{{ r.name }}</span><strong>₱{{ r.fee }}</strong></div>{% endfor %}</section><section class="card"><h2>Event Categories</h2><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="kind" value="event"><div class="field"><label>Name</label><input name="name" required></div><button class="btn btn-primary" type="submit">Add Event Category</button></form>{% for r in event_categories %}<div class="kv"><span>{{ r.name }}</span></div>{% endfor %}</section></div><section class="card"><span class="eyebrow">Submission receipts</span><h2>Estimated Processing Information</h2><p class="muted">These estimates appear on acknowledgment receipts and do not guarantee approval.</p><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="kind" value="receipt"><div class="form-row"><div class="field"><label>Permit applications</label><input name="processing_permit" value="{{ receipt_processing('permit') }}"></div><div class="field"><label>Event requests</label><input name="processing_event" value="{{ receipt_processing('event') }}"></div></div><div class="field"><label>Blotter reports</label><input name="processing_blotter" value="{{ receipt_processing('blotter') }}"></div><button class="btn btn-primary" type="submit">Save Processing Information</button></form></section>{% endblock %}
+{% extends 'base.html' %}
+{% block page_title %}System Configuration{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">Administrator only</span>
+    <h1>System Configuration</h1>
+    <p class="muted">Enter only Barangay-approved classifications, accepted IDs, venues, and actual fees. The system does not create speculative values.</p>
+  </div>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <h2>Permit Types and Fees</h2>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="kind" value="permit">
+      <div class="field"><label>Name</label><input name="name" required></div>
+      <div class="field"><label>Description</label><textarea name="description"></textarea></div>
+      <div class="field"><label>Requirements / What to Bring</label><textarea name="requirements"></textarea></div>
+      <div class="field"><label>Actual Fee</label><input type="number" name="fee" min="0" step=".01" required></div>
+      <button class="btn btn-primary" type="submit">Add Permit Type</button>
+    </form>
+    {% for r in permit_types %}
+      <details class="catalog-item">
+        <summary>{{ r.name }} — {{ '₱%.2f'|format(r.fee) if r.fee_is_configured and r.fee is not none else 'Fee not configured' }}</summary>
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="kind" value="permit">
+          <input type="hidden" name="record_id" value="{{ r.id }}">
+          <div class="field"><label>Name</label><input name="name" value="{{ r.name }}" required></div>
+          <div class="field"><label>Description</label><textarea name="description">{{ r.description or '' }}</textarea></div>
+          <div class="field"><label>Requirements</label><textarea name="requirements">{{ r.requirements or '' }}</textarea></div>
+          <div class="field"><label>Actual Fee</label><input type="number" name="fee" min="0" step=".01" value="{{ r.fee if r.fee is not none else '' }}" required></div>
+          <label class="check-label"><input type="checkbox" name="is_active" value="1" {{ 'checked' if r.is_active }}><input type="hidden" name="is_active" value="0"> Active</label>
+          <button class="btn btn-sm btn-outline" type="submit">Save Permit Type</button>
+        </form>
+      </details>
+    {% endfor %}
+  </section>
+
+  <section class="card">
+    <h2>Event Categories and Fees</h2>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="kind" value="event">
+      <div class="field"><label>Name</label><input name="name" required></div>
+      <div class="field"><label>Description</label><textarea name="description"></textarea></div>
+      <div class="field"><label>Actual Fee</label><input type="number" name="fee" min="0" step=".01" required></div>
+      <button class="btn btn-primary" type="submit">Add Event Category</button>
+    </form>
+    {% for r in event_categories %}
+      <details class="catalog-item">
+        <summary>{{ r.name }} — {{ '₱%.2f'|format(r.fee) if r.fee_is_configured and r.fee is not none else 'Fee not configured' }}</summary>
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="kind" value="event">
+          <input type="hidden" name="record_id" value="{{ r.id }}">
+          <div class="field"><label>Name</label><input name="name" value="{{ r.name }}" required></div>
+          <div class="field"><label>Description</label><textarea name="description">{{ r.description or '' }}</textarea></div>
+          <div class="field"><label>Actual Fee</label><input type="number" name="fee" min="0" step=".01" value="{{ r.fee if r.fee is not none else '' }}" required></div>
+          <label class="check-label"><input type="checkbox" name="is_active" value="1" {{ 'checked' if r.is_active }}><input type="hidden" name="is_active" value="0"> Active</label>
+          <button class="btn btn-sm btn-outline" type="submit">Save Event Category</button>
+        </form>
+      </details>
+    {% endfor %}
+  </section>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <h2>Event Venues</h2>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="kind" value="venue">
+      <div class="field"><label>Venue Name</label><input name="name" required></div>
+      <div class="field"><label>Address</label><input name="address"></div>
+      <div class="field"><label>Description</label><textarea name="description"></textarea></div>
+      <button class="btn btn-primary" type="submit">Add Venue</button>
+    </form>
+    {% for r in venues %}
+      <details class="catalog-item">
+        <summary>{{ r.name }} — {{ 'Active' if r.is_active else 'Inactive' }}</summary>
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="kind" value="venue">
+          <input type="hidden" name="record_id" value="{{ r.id }}">
+          <div class="field"><label>Venue Name</label><input name="name" value="{{ r.name }}" required></div>
+          <div class="field"><label>Address</label><input name="address" value="{{ r.address or '' }}"></div>
+          <div class="field"><label>Description</label><textarea name="description">{{ r.description or '' }}</textarea></div>
+          <label class="check-label"><input type="checkbox" name="is_active" value="1" {{ 'checked' if r.is_active }}><input type="hidden" name="is_active" value="0"> Active</label>
+          <button class="btn btn-sm btn-outline" type="submit">Save Venue</button>
+        </form>
+      </details>
+    {% else %}
+      <p class="empty-state">No approved venue configured.</p>
+    {% endfor %}
+  </section>
+
+  <section class="card">
+    <h2>Resident Types</h2>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="kind" value="resident_type">
+      <div class="field"><label>Approved Resident Type</label><input name="name" required></div>
+      <div class="field"><label>Description</label><textarea name="description"></textarea></div>
+      <button class="btn btn-primary" type="submit">Add Resident Type</button>
+    </form>
+    {% for r in resident_types %}
+      <details class="catalog-item">
+        <summary>{{ r.name }} — {{ 'Active' if r.is_active else 'Inactive' }}</summary>
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="kind" value="resident_type">
+          <input type="hidden" name="record_id" value="{{ r.id }}">
+          <div class="field"><label>Resident Type</label><input name="name" value="{{ r.name }}" required></div>
+          <div class="field"><label>Description</label><textarea name="description">{{ r.description or '' }}</textarea></div>
+          <label class="check-label"><input type="checkbox" name="is_active" value="1" {{ 'checked' if r.is_active }}><input type="hidden" name="is_active" value="0"> Active</label>
+          <button class="btn btn-sm btn-outline" type="submit">Save Resident Type</button>
+        </form>
+      </details>
+    {% else %}
+      <p class="empty-state">No approved Resident Type configured.</p>
+    {% endfor %}
+  </section>
+</div>
+
+<section class="card">
+  <h2>Accepted Valid IDs</h2>
+  <p class="muted">This list controls registration. Add only ID types officially accepted by Barangay Minante 1.</p>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="kind" value="accepted_id">
+    <div class="form-row">
+      <div class="field"><label>Accepted ID Name</label><input name="name" required></div>
+      <div class="field"><label>Description</label><input name="description"></div>
+    </div>
+    <label class="check-label"><input type="checkbox" name="is_accepted_for_registration" value="1"> Accepted for Resident Registration</label>
+    <button class="btn btn-primary" type="submit">Add Accepted ID</button>
+  </form>
+  <div class="catalog-grid">
+    {% for r in accepted_ids %}
+      <details class="catalog-item">
+        <summary>{{ r.name }} — {{ 'Active' if r.is_active else 'Inactive' }}</summary>
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="kind" value="accepted_id">
+          <input type="hidden" name="record_id" value="{{ r.id }}">
+          <div class="field"><label>Accepted ID Name</label><input name="name" value="{{ r.name }}" required></div>
+          <div class="field"><label>Description</label><input name="description" value="{{ r.description or '' }}"></div>
+          <label class="check-label"><input type="checkbox" name="is_active" value="1" {{ 'checked' if r.is_active }}><input type="hidden" name="is_active" value="0"> Active</label>
+          <label class="check-label"><input type="checkbox" name="is_accepted_for_registration" value="1" {{ 'checked' if r.is_accepted_for_registration }}><input type="hidden" name="is_accepted_for_registration" value="0"> Accepted for Resident Registration</label>
+          <button class="btn btn-sm btn-outline" type="submit">Save Accepted ID</button>
+        </form>
+      </details>
+    {% else %}
+      <p class="empty-state">No accepted ID configured.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card">
+  <span class="eyebrow">Submission Acknowledgments</span>
+  <h2>Estimated Processing Information</h2>
+  <p class="muted">These estimates appear in editable Word acknowledgments and do not guarantee approval.</p>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="kind" value="acknowledgment">
+    <div class="form-row">
+      <div class="field"><label>Permit Applications</label><input name="processing_permit" value="{{ acknowledgment_processing('permit') }}"></div>
+      <div class="field"><label>Event Requests</label><input name="processing_event" value="{{ acknowledgment_processing('event') }}"></div>
+    </div>
+    <div class="field"><label>Blotter Reports</label><input name="processing_blotter" value="{{ acknowledgment_processing('blotter') }}"></div>
+    <button class="btn btn-primary" type="submit">Save Processing Information</button>
+  </form>
+</section>
+{% endblock %}
