@@ -49,6 +49,7 @@ class Config:
     UPLOAD_FOLDER = os.path.join(DATA_DIR, "uploads")
     IDENTIFICATION_FOLDER = os.path.join(DATA_DIR, "identifications")
     PERMIT_FOLDER = os.path.join(DATA_DIR, "permits")
+    SIGNATURE_FOLDER = os.path.join(DATA_DIR, "signatures")
 
     SESSION_COOKIE_SECURE = _as_bool(
         os.environ.get("SESSION_COOKIE_SECURE"), False

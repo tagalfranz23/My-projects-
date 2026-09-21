@@ -27,20 +27,32 @@ from migration import upgrade_legacy_schema
 from models import (
     AcceptedIdType,
     ActivityLog,
+    ApplicationRequirement,
+    AssistanceReferral,
     Announcement,
     BlotterCase,
     EventCategory,
     EventRequest,
     EventVenue,
+    GeneralConcern,
+    Household,
+    HouseholdMember,
     Notification,
     PasswordResetToken,
     PermitApplication,
+    PermitSignatory,
     PermitType,
+    QueueEntry,
+    RequestAssignment,
+    RequirementHistory,
     Report,
     ResidentProfile,
+    ResidentFeedback,
+    ResidentUpdateRequest,
     ResidentType,
     Schedule,
     SystemSetting,
+    ServiceRequirement,
     User,
     db,
     log_activity,
@@ -49,6 +61,7 @@ from permissions import can, navigation_for, permission_required
 from services.documentgen import (
     DOCX_MIMETYPE,
     generate_approved_permit_document,
+    generate_walkin_claim_stub,
     generate_submission_acknowledgment,
     generate_system_report,
 )
@@ -74,6 +87,7 @@ for durable_folder in (
     app.config["UPLOAD_FOLDER"],
     app.config["IDENTIFICATION_FOLDER"],
     app.config["PERMIT_FOLDER"],
+    app.config["SIGNATURE_FOLDER"],
 ):
     os.makedirs(durable_folder, exist_ok=True)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
@@ -190,6 +204,97 @@ def save_valid_id_upload(field="valid_id_file"):
     return _validated_upload(
         field, app.config["IDENTIFICATION_FOLDER"], "valid ID"
     )
+
+
+def save_signature_upload(field="signature_file"):
+    """Store an Administrator-uploaded electronic signature outside static files."""
+    uploaded = request.files.get(field)
+    if not uploaded or not uploaded.filename:
+        return None
+    extension = uploaded.filename.rsplit(".", 1)[-1].lower() if "." in uploaded.filename else ""
+    if extension not in {"png", "jpg", "jpeg"}:
+        raise ValueError("An electronic signature must be a PNG or JPEG image.")
+    return _validated_upload(field, app.config["SIGNATURE_FOLDER"], "signature image")
+
+
+def active_requirements(permit_type_id):
+    return ServiceRequirement.query.filter_by(
+        permit_type_id=permit_type_id, is_active=True
+    ).order_by(ServiceRequirement.position, ServiceRequirement.id).all()
+
+
+def requirement_progress(application):
+    records = application.requirement_records
+    total = len(records)
+    submitted = sum(record.status != "Not Submitted" for record in records)
+    verified = sum(record.status == "Verified" for record in records)
+    return {
+        "total": total,
+        "submitted": submitted,
+        "verified": verified,
+        "submitted_percent": round((submitted / total) * 100) if total else 100,
+        "verified_percent": round((verified / total) * 100) if total else 100,
+    }
+
+
+def create_requirement_snapshot(application, definitions, resident=None):
+    """Snapshot the configured requirements and resident uploads in one transaction."""
+    for definition in definitions:
+        raw_value = request.form.get(f"requirement_{definition.id}_value", "").strip()
+        upload = request.files.get(f"requirement_{definition.id}_file")
+        has_upload = bool(upload and upload.filename)
+        is_system_check = definition.requirement_type == "System Check"
+        if definition.is_required and not (raw_value or has_upload or is_system_check):
+            raise ValueError(f"{definition.name} is required before submission.")
+        status = "Not Submitted"
+        value = raw_value or None
+        file_path = None
+        if is_system_check:
+            profile = (resident or actor()).resident_profile
+            if not profile or profile.approval_status != "Approved":
+                raise ValueError(f"{definition.name} could not be confirmed by the system.")
+            status = "Verified"
+            value = "System check passed"
+        elif raw_value or has_upload:
+            file_path = save_upload(f"requirement_{definition.id}_file") if has_upload else None
+            status = "Submitted"
+        record = ApplicationRequirement(
+            application_id=application.id,
+            definition_id=definition.id,
+            name=definition.name,
+            requirement_type=definition.requirement_type,
+            instructions=definition.instructions,
+            is_required=definition.is_required,
+            status=status,
+            value=value,
+            file_path=file_path,
+            submitted_at=now() if status != "Not Submitted" else None,
+        )
+        db.session.add(record)
+        db.session.flush()
+        if status != "Not Submitted":
+            db.session.add(RequirementHistory(
+                requirement_id=record.id, actor_id=actor().id, actor_role=actor().role,
+                status=status, file_path=file_path, value=value,
+            ))
+
+
+def permit_processor_allowed(application):
+    if actor().role not in {"staff", "admin"}:
+        abort(403)
+    if actor().role == "staff" and application.applicant_id == actor().id:
+        abort(403, "Staff members cannot process their own personal requests.")
+
+
+def private_requirement_file(application, requirement):
+    permit_processor_allowed(application)
+    if not requirement.file_path:
+        abort(404)
+    filename = os.path.basename(requirement.file_path)
+    path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+    if not os.path.isfile(path):
+        abort(404)
+    return send_file(path, as_attachment=True, download_name=f"requirement-{application.reference_no}")
 
 
 def masked_id_number(value):
@@ -856,19 +961,26 @@ def profile():
 @permission_required("announcement", "view")
 def announcements():
     if request.method == "POST":
-        if actor().role != "admin":
+        if actor().role not in {"staff", "admin"}:
             abort(403)
         title = request.form.get("title", "").strip()
         body = request.form.get("body", "").strip()
         if not title or not body:
             flash("Announcement title and message are required.", "danger")
         else:
-            item = Announcement(title=title, body=body, created_by=actor().id)
+            approved = actor().role == "admin"
+            item = Announcement(
+                title=title, body=body, created_by=actor().id,
+                status="Published" if approved else "Draft",
+                is_published=approved, published_at=now(),
+                approved_by=actor().id if approved else None,
+                approved_at=now() if approved else None,
+            )
             db.session.add(item)
             db.session.flush()
             audit("ANNOUNCEMENT_CREATED", "announcement", str(item.id), title)
             db.session.commit()
-            flash("Announcement published.", "success")
+            flash("Announcement published." if approved else "Announcement saved as a draft for Administrator approval.", "success")
     query = Announcement.query
     if actor().role != "admin":
         query = query.filter(
@@ -878,6 +990,21 @@ def announcements():
     return render_template(
         "announcements.html", records=query.order_by(Announcement.published_at.desc()).all()
     )
+
+
+@app.post("/announcements/<int:record_id>/approve")
+@login_required
+@permission_required("announcement", "manage")
+def approve_announcement(record_id):
+    item = Announcement.query.get_or_404(record_id)
+    item.status = "Published"
+    item.is_published = True
+    item.published_at = now()
+    item.approved_by = actor().id
+    item.approved_at = now()
+    audit("ANNOUNCEMENT_APPROVED", "announcement", str(item.id), item.title)
+    db.session.commit()
+    return redirect(url_for("announcements"))
 
 
 @app.post("/announcements/<int:record_id>/delete")
@@ -890,6 +1017,293 @@ def announcement_delete(record_id):
     audit("ANNOUNCEMENT_DELETED", "announcement", reference, title)
     db.session.commit()
     return redirect(url_for("announcements"))
+
+
+def staff_or_admin():
+    if actor().role not in {"staff", "admin"}:
+        abort(403)
+
+
+def next_queue_number(category):
+    prefix = {"Document Request": "A", "Complaint / Concern": "B"}.get(category, "C")
+    today = date.today()
+    count = QueueEntry.query.filter_by(queue_date=today, category=category).count()
+    return f"{prefix}-{count + 1:03d}"
+
+
+def search_residents(term):
+    term = (term or "").strip()
+    query = User.query.join(ResidentProfile, ResidentProfile.user_id == User.id).filter(
+        User.role.in_(("resident", "staff"))
+    )
+    if term:
+        like = f"%{term}%"
+        query = query.filter(or_(
+            User.full_name.ilike(like), User.username.ilike(like),
+            User.contact_number.ilike(like), ResidentProfile.household_number.ilike(like),
+            ResidentProfile.purok_zone.ilike(like),
+        ))
+    return query.order_by(User.full_name).limit(50).all()
+
+
+@app.route("/front-desk", methods=["GET", "POST"])
+@login_required
+def front_desk():
+    staff_or_admin()
+    if request.method == "POST":
+        resident = db.session.get(User, request.form.get("resident_id", type=int))
+        permit_type = db.session.get(PermitType, request.form.get("permit_type_id", type=int))
+        purpose = request.form.get("purpose", "").strip()
+        if not resident or resident.role not in {"resident", "staff"} or not permit_type or not permit_type.is_active or not purpose:
+            flash("Select a valid Resident, active service, and purpose.", "danger")
+        elif not permit_type.fee_is_configured or permit_type.fee is None:
+            flash("This service is unavailable until the Administrator configures its fee.", "danger")
+        else:
+            try:
+                item = PermitApplication(
+                    applicant_id=resident.id, permit_type_id=permit_type.id, purpose=purpose,
+                    fee_at_submission=permit_type.fee, request_source="Walk-in / Staff Assisted",
+                    encoded_by_staff_id=actor().id, office_name=request.form.get("office_name", "").strip() or None,
+                )
+                db.session.add(item)
+                db.session.flush()
+                create_requirement_snapshot(item, active_requirements(permit_type.id), resident)
+                queue = QueueEntry(
+                    queue_date=date.today(), queue_number=next_queue_number("Document Request"),
+                    category="Document Request", resident_id=resident.id,
+                    permit_application_id=item.id, created_by=actor().id,
+                )
+                db.session.add(queue)
+                audit("WALKIN_REQUEST_CREATED", "permit", item.reference_no, "Staff-assisted resident request")
+                audit("QUEUE_CREATED", "queue", queue.queue_number, item.reference_no)
+                queue_notifications(resident.id, "Walk-in request received", f"{item.reference_no} was filed at the Barangay front desk.", "permit", item.id)
+                db.session.commit()
+                return redirect(url_for("walkin_claim_stub", record_id=item.id))
+            except ValueError as exc:
+                db.session.rollback()
+                flash(str(exc), "danger")
+    term = request.args.get("q", "")
+    return render_template(
+        "front_desk.html", residents=search_residents(term), query=term,
+        permit_types=PermitType.query.filter_by(is_active=True).order_by(PermitType.name).all(),
+        requirements_by_type={item.id: active_requirements(item.id) for item in PermitType.query.filter_by(is_active=True).all()},
+        queues=QueueEntry.query.filter_by(queue_date=date.today()).order_by(QueueEntry.created_at).all(),
+        ready_permits=PermitApplication.query.filter_by(status="Ready for Pickup").order_by(PermitApplication.updated_at.desc()).all(),
+    )
+
+
+@app.get("/front-desk/permits/<int:record_id>/claim-stub.docx")
+@login_required
+def walkin_claim_stub(record_id):
+    staff_or_admin()
+    item = PermitApplication.query.get_or_404(record_id)
+    queue = QueueEntry.query.filter_by(permit_application_id=item.id).order_by(QueueEntry.id.desc()).first()
+    if not queue:
+        abort(404)
+    audit("WALKIN_CLAIM_STUB_GENERATED", "permit", item.reference_no)
+    db.session.commit()
+    return send_file(generate_walkin_claim_stub(item, queue), mimetype=DOCX_MIMETYPE,
+                     as_attachment=True, download_name=f"claim-stub-{item.reference_no}.docx")
+
+
+@app.post("/front-desk/queue/<int:queue_id>/<action>")
+@login_required
+def update_queue(queue_id, action):
+    staff_or_admin()
+    queue = QueueEntry.query.get_or_404(queue_id)
+    if action not in {"call", "serve", "complete"}:
+        abort(400)
+    if action == "call":
+        queue.status, queue.called_at = "Now Serving", now()
+    elif action == "serve":
+        queue.status, queue.served_at = "Serving", now()
+    else:
+        queue.status, queue.completed_at = "Completed", now()
+    audit("QUEUE_STATUS_UPDATED", "queue", queue.queue_number, queue.status)
+    db.session.commit()
+    return redirect(url_for("front_desk"))
+
+
+@app.post("/front-desk/permits/<int:record_id>/release")
+@login_required
+def release_walkin_permit(record_id):
+    staff_or_admin()
+    item = PermitApplication.query.get_or_404(record_id)
+    permit_processor_allowed(item)
+    if item.status != "Ready for Pickup" or not item.is_signed:
+        abort(400, "Only a signed Permit that is ready for release can be released.")
+    if request.form.get("identity_confirmed") != "1":
+        flash("Confirm the Resident's identity before release.", "danger")
+        return redirect(url_for("front_desk"))
+    item.status, item.released_by, item.released_at = "Completed", actor().id, now()
+    audit("PERMIT_RELEASED", "permit", item.reference_no, "Identity confirmed at release counter.")
+    queue_notifications(item.applicant_id, "Permit released", f"{item.reference_no} was released by the Barangay counter.", "permit", item.id)
+    db.session.commit()
+    flash("Permit release recorded.", "success")
+    return redirect(url_for("front_desk"))
+
+
+@app.post("/front-desk/permits/<int:record_id>/assign")
+@login_required
+def assign_permit(record_id):
+    staff_or_admin()
+    item = PermitApplication.query.get_or_404(record_id)
+    assignee = db.session.get(User, request.form.get("assigned_to_user_id", type=int))
+    if not assignee or assignee.role not in {"staff", "admin"} or assignee.id == item.applicant_id:
+        abort(400, "Select an eligible staff member or Administrator.")
+    RequestAssignment.query.filter_by(permit_application_id=item.id, status="Active").update({"status": "Reassigned"})
+    assignment = RequestAssignment(
+        permit_application_id=item.id, assigned_to_user_id=assignee.id,
+        assigned_by=actor().id, note=request.form.get("note", "").strip() or None,
+    )
+    db.session.add(assignment)
+    audit("REQUEST_ASSIGNED", "permit", item.reference_no, f"Assigned to user {assignee.id}")
+    db.session.commit()
+    return redirect(url_for("permit_detail", record_id=item.id))
+
+
+@app.post("/front-desk/concerns")
+@login_required
+def create_general_concern():
+    staff_or_admin()
+    resident = db.session.get(User, request.form.get("resident_id", type=int))
+    category = request.form.get("category", "").strip()
+    description = request.form.get("description", "").strip()
+    if not resident or not category or not description:
+        abort(400, "Resident, concern category, and description are required.")
+    item = GeneralConcern(
+        resident_id=resident.id, category=category, description=description,
+        location=request.form.get("location", "").strip() or None,
+        sensitivity_level=request.form.get("sensitivity_level", "Standard"), encoded_by=actor().id,
+    )
+    db.session.add(item)
+    db.session.flush()
+    audit("CONCERN_RECORDED", "concern", item.reference_no, category)
+    db.session.commit()
+    return redirect(url_for("front_desk"))
+
+
+@app.post("/front-desk/concerns/<int:record_id>/route")
+@login_required
+def route_general_concern(record_id):
+    staff_or_admin()
+    item = GeneralConcern.query.get_or_404(record_id)
+    assignee = db.session.get(User, request.form.get("assigned_to", type=int))
+    if not assignee or assignee.role not in {"staff", "admin"}:
+        abort(400)
+    item.assigned_to = assignee.id
+    item.status = "Routed"
+    audit("CONCERN_ROUTED", "concern", item.reference_no)
+    db.session.commit()
+    return redirect(url_for("front_desk"))
+
+
+@app.post("/front-desk/resident-updates")
+@login_required
+def create_resident_update_request():
+    staff_or_admin()
+    resident = db.session.get(User, request.form.get("resident_id", type=int))
+    field_name = request.form.get("field_name", "").strip()
+    proposed_value = request.form.get("proposed_value", "").strip()
+    allowed_fields = {"contact_number", "email", "address", "household_number", "purok_zone"}
+    if not resident or field_name not in allowed_fields or not proposed_value:
+        abort(400)
+    target = resident.resident_profile if field_name in {"household_number", "purok_zone"} else resident
+    previous = getattr(target, field_name, None)
+    item = ResidentUpdateRequest(
+        resident_id=resident.id, field_name=field_name, old_value=str(previous or ""),
+        proposed_value=proposed_value, created_by=actor().id,
+    )
+    db.session.add(item)
+    audit("RESIDENT_UPDATE_REQUESTED", "resident", str(resident.id), field_name)
+    db.session.commit()
+    return redirect(url_for("front_desk"))
+
+
+@app.post("/resident-updates/<int:record_id>/review")
+@login_required
+@permission_required("users", "manage")
+def review_resident_update(record_id):
+    item = ResidentUpdateRequest.query.get_or_404(record_id)
+    decision = request.form.get("decision")
+    if decision not in {"Approved", "Rejected"}:
+        abort(400)
+    if decision == "Approved":
+        target = item.resident.resident_profile if item.field_name in {"household_number", "purok_zone"} else item.resident
+        setattr(target, item.field_name, item.proposed_value)
+    item.status, item.reviewed_by, item.reviewed_at = decision, actor().id, now()
+    audit("RESIDENT_PROFILE_UPDATED" if decision == "Approved" else "RESIDENT_UPDATE_REJECTED", "resident", str(item.resident_id), item.field_name)
+    db.session.commit()
+    return redirect(url_for("front_desk"))
+
+
+@app.post("/front-desk/households")
+@login_required
+def manage_household():
+    staff_or_admin()
+    household_number = request.form.get("household_number", "").strip()
+    resident = db.session.get(User, request.form.get("resident_id", type=int))
+    if not household_number or not resident:
+        abort(400)
+    household = Household.query.filter_by(household_number=household_number).first()
+    if not household:
+        household = Household(household_number=household_number, address=request.form.get("address", "").strip() or None)
+        db.session.add(household)
+        db.session.flush()
+    existing = HouseholdMember.query.filter_by(resident_id=resident.id, membership_status="Active").first()
+    if existing and existing.household_id != household.id:
+        existing.membership_status, existing.left_at = "Transferred", now()
+        audit("HOUSEHOLD_MEMBER_TRANSFERRED", "household", household.household_number, str(resident.id))
+    membership = HouseholdMember.query.filter_by(household_id=household.id, resident_id=resident.id).first()
+    if not membership:
+        db.session.add(HouseholdMember(household_id=household.id, resident_id=resident.id))
+    if request.form.get("is_head") == "1":
+        household.head_resident_id = resident.id
+    resident.resident_profile.household_number = household.household_number
+    audit("HOUSEHOLD_UPDATED", "household", household.household_number, str(resident.id))
+    db.session.commit()
+    return redirect(url_for("front_desk"))
+
+
+@app.post("/front-desk/referrals")
+@login_required
+def create_assistance_referral():
+    staff_or_admin()
+    resident = db.session.get(User, request.form.get("resident_id", type=int))
+    category, description = request.form.get("category", "").strip(), request.form.get("description", "").strip()
+    if not resident or not category or not description:
+        abort(400)
+    referral = AssistanceReferral(
+        resident_id=resident.id, category=category, description=description,
+        created_by=actor().id, sensitivity_level=request.form.get("sensitivity_level", "Restricted"),
+    )
+    db.session.add(referral)
+    db.session.flush()
+    audit("ASSISTANCE_REFERRAL_CREATED", "referral", referral.reference_no, category)
+    db.session.commit()
+    return redirect(url_for("front_desk"))
+
+
+@app.post("/permits/<int:record_id>/feedback")
+@login_required
+def submit_permit_feedback(record_id):
+    item = PermitApplication.query.get_or_404(record_id)
+    if item.applicant_id != actor().id or item.status != "Completed":
+        abort(403)
+    rating = request.form.get("rating", type=int)
+    if rating not in {1, 2, 3, 4, 5}:
+        abort(400)
+    feedback = ResidentFeedback(
+        resident_id=actor().id, permit_application_id=item.id, rating=rating,
+        comment=request.form.get("comment", "").strip() or None,
+    )
+    db.session.add(feedback)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        flash("Feedback for this completed request was already recorded.", "warning")
+    return redirect(url_for("permit_detail", record_id=item.id))
 
 
 @app.route("/dashboard")
@@ -1070,6 +1484,7 @@ def permits():
             )
         else:
             try:
+                definitions = active_requirements(permit_type.id)
                 attachment = save_upload("attachment")
                 item = PermitApplication(
                     applicant_id=actor().id,
@@ -1080,6 +1495,7 @@ def permits():
                 )
                 db.session.add(item)
                 db.session.flush()
+                create_requirement_snapshot(item, definitions)
                 action = (
                     "STAFF_PERSONAL_REQUEST_SUBMITTED"
                     if actor().role == "staff"
@@ -1112,6 +1528,10 @@ def permits():
         .order_by(PermitApplication.application_date.desc())
         .all(),
         types=PermitType.query.filter_by(is_active=True).order_by(PermitType.name).all(),
+        requirements_by_type={
+            permit_type.id: active_requirements(permit_type.id)
+            for permit_type in PermitType.query.filter_by(is_active=True).all()
+        },
         allow_create=actor().role == "resident"
         or (actor().role == "staff" and personal_scope),
         personal_scope=personal_scope,
@@ -1131,8 +1551,103 @@ def permit_detail(record_id):
         else allowed_transitions("permit", actor().role, item.status)
     )
     return render_template(
-        "record_detail.html", kind="permit", record=item, transitions=transitions
+        "record_detail.html", kind="permit", record=item, transitions=transitions,
+        requirement_progress=requirement_progress(item),
     )
+
+
+@app.get("/permits/<int:record_id>/requirements/<int:requirement_id>/file")
+@login_required
+def permit_requirement_file(record_id, requirement_id):
+    item = PermitApplication.query.get_or_404(record_id)
+    requirement = ApplicationRequirement.query.filter_by(
+        id=requirement_id, application_id=item.id
+    ).first_or_404()
+    return private_requirement_file(item, requirement)
+
+
+@app.post("/permits/<int:record_id>/requirements/<int:requirement_id>/submit")
+@login_required
+def resubmit_permit_requirement(record_id, requirement_id):
+    item = PermitApplication.query.get_or_404(record_id)
+    requirement = ApplicationRequirement.query.filter_by(
+        id=requirement_id, application_id=item.id
+    ).first_or_404()
+    if item.applicant_id != actor().id:
+        abort(403)
+    if item.status in {"Approved", "Ready for Pickup", "Completed", "Rejected"}:
+        abort(400, "This requirement can no longer be replaced.")
+    value = request.form.get("value", "").strip() or None
+    upload = request.files.get("file")
+    if requirement.requirement_type == "Document" and not (upload and upload.filename):
+        flash("Upload a replacement document.", "danger")
+        return redirect(url_for("permit_detail", record_id=item.id))
+    if requirement.requirement_type != "Document" and not value and not (upload and upload.filename):
+        flash("Provide the required information before resubmitting.", "danger")
+        return redirect(url_for("permit_detail", record_id=item.id))
+    try:
+        file_path = save_upload("file") if upload and upload.filename else requirement.file_path
+        requirement.file_path = file_path
+        requirement.value = value
+        requirement.status = "Submitted"
+        requirement.submitted_at = now()
+        requirement.reviewed_by = None
+        requirement.reviewed_at = None
+        requirement.review_note = None
+        db.session.add(RequirementHistory(
+            requirement_id=requirement.id, actor_id=actor().id, actor_role=actor().role,
+            status="Submitted", file_path=file_path, value=value,
+            note="Replacement submitted for review.",
+        ))
+        audit("REQUIREMENT_SUBMITTED", "permit", item.reference_no, requirement.name)
+        db.session.commit()
+        flash("Replacement submitted for Barangay review.", "success")
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "danger")
+    return redirect(url_for("permit_detail", record_id=item.id))
+
+
+@app.post("/permits/<int:record_id>/requirements/<int:requirement_id>/review")
+@login_required
+def review_permit_requirement(record_id, requirement_id):
+    item = PermitApplication.query.get_or_404(record_id)
+    requirement = ApplicationRequirement.query.filter_by(
+        id=requirement_id, application_id=item.id
+    ).first_or_404()
+    permit_processor_allowed(item)
+    target = request.form.get("status", "")
+    if target not in {"Under Review", "Verified", "Needs Resubmission"}:
+        abort(400, "Invalid requirement review status.")
+    if requirement.status == "Not Submitted":
+        abort(400, "A requirement must be submitted before it can be reviewed.")
+    note = request.form.get("note", "").strip()
+    if target == "Needs Resubmission" and not note:
+        flash("Provide a clear correction reason.", "danger")
+        return redirect(url_for("permit_detail", record_id=item.id))
+    requirement.status = target
+    requirement.reviewed_by = actor().id
+    requirement.reviewed_at = now()
+    requirement.review_note = note or None
+    if item.status == "Pending":
+        item.status = "Under Review"
+    db.session.add(RequirementHistory(
+        requirement_id=requirement.id, actor_id=actor().id, actor_role=actor().role,
+        status=target, note=note or None, file_path=requirement.file_path, value=requirement.value,
+    ))
+    event = "REQUIREMENT_VERIFIED" if target == "Verified" else (
+        "REQUIREMENT_RESUBMISSION_REQUESTED" if target == "Needs Resubmission" else "REQUIREMENT_UNDER_REVIEW"
+    )
+    audit(event, "permit", item.reference_no, requirement.name)
+    if target == "Needs Resubmission":
+        queue_notifications(
+            item.applicant_id, "Permit requirement needs resubmission",
+            f"{item.reference_no}: {requirement.name} needs correction. {note}",
+            "permit", item.id,
+        )
+    db.session.commit()
+    flash(f"{requirement.name} marked {target}.", "success")
+    return redirect(url_for("permit_detail", record_id=item.id))
 
 
 def _parse_event_form():
@@ -1543,14 +2058,20 @@ def submission_receipt(kind, record_id):
 def approved_permit_document(record_id):
     item = PermitApplication.query.get_or_404(record_id)
     ensure_ownership(item.applicant_id)
-    if item.status not in {"Approved", "Ready for Pickup", "Completed"}:
+    if item.status not in {"Ready for Pickup", "Completed"} or not item.is_signed:
         abort(403)
+    signature_file = os.path.join(
+        app.config["SIGNATURE_FOLDER"], os.path.basename(item.signature_path)
+    )
     document = generate_approved_permit_document(
         item,
         item.applicant,
         item.permit_type,
         "Barangay Minante 1",
         "Cauayan City, Isabela",
+        item.signatory_name,
+        item.signatory_title,
+        signature_file if os.path.isfile(signature_file) else None,
     )
     audit(
         "APPROVED_PERMIT_DOCUMENT_DOWNLOADED",
@@ -1565,6 +2086,39 @@ def approved_permit_document(record_id):
         as_attachment=True,
         download_name=f"approved-{item.reference_no}.docx",
     )
+
+
+@app.post("/permits/<int:record_id>/sign")
+@login_required
+@permission_required("permit", "approve")
+def sign_approved_permit(record_id):
+    item = PermitApplication.query.get_or_404(record_id)
+    if item.status != "Approved" or not item.required_requirements_verified:
+        abort(400, "Only a fully verified approved Permit can be signed.")
+    signatory = PermitSignatory.query.filter_by(permit_type_id=item.permit_type_id).first()
+    if not signatory or signatory.authorized_admin_id != actor().id:
+        abort(403, "No authorized electronic-signature configuration is available for this Permit Type.")
+    signature_path = os.path.join(app.config["SIGNATURE_FOLDER"], os.path.basename(signatory.file_path))
+    if not os.path.isfile(signature_path):
+        abort(400, "The protected electronic signature asset is unavailable.")
+    item.signed_by = actor().id
+    item.signed_at = now()
+    item.signatory_name = signatory.name
+    item.signatory_title = signatory.title
+    item.signature_path = signatory.file_path
+    item.document_version = (item.document_version or 0) + 1
+    item.status = "Ready for Pickup"
+    audit("PERMIT_SIGNED", "permit", item.reference_no, "Authorized electronic signature applied.")
+    audit("PERMIT_READY_FOR_RELEASE", "permit", item.reference_no)
+    queue_notifications(
+        item.applicant_id,
+        "Permit approved and signed",
+        f"{item.reference_no} has been approved and signed. Your official Permit is ready for release and download.",
+        "permit", item.id,
+    )
+    db.session.commit()
+    flash("Electronic signature applied. The Permit is ready for release.", "success")
+    return redirect(url_for("permit_detail", record_id=item.id))
 
 
 def update_status(item, kind, recipient_id, reference):
@@ -1585,6 +2139,14 @@ def update_status(item, kind, recipient_id, reference):
     old = item.status
     if not validate_transition(kind, actor().role, old, target):
         abort(400, "Invalid status transition.")
+    if kind == "permit" and target == "Endorsed to Admin":
+        if not item.required_requirements_verified:
+            flash("All required requirements must be verified before endorsement.", "danger")
+            return
+        item.endorsed_by = actor().id
+        item.endorsed_at = now()
+        item.endorsement_note = request.form.get("remarks", "").strip() or None
+        audit("APPLICATION_ENDORSED_TO_ADMIN", "permit", reference, item.endorsement_note)
     item.status = target
     if hasattr(item, "remarks"):
         item.remarks = request.form.get("remarks", "").strip() or None
@@ -1592,6 +2154,11 @@ def update_status(item, kind, recipient_id, reference):
         item.reviewed_by = actor().id
     if target in {"Approved", "Rejected"} and hasattr(item, "decision_date"):
         item.decision_date = now()
+        if target == "Approved" and kind == "permit":
+            item.decided_by = actor().id
+            audit("PERMIT_APPROVED", "permit", reference, "Awaiting authorized electronic signature.")
+        elif target == "Rejected" and kind == "permit":
+            audit("PERMIT_REJECTED", "permit", reference)
     if kind == "event" and target in {"Rejected", "Cancelled"}:
         release_event_reservation(item, f"Event request changed to {target}.")
     audit(f"{kind.upper()}_STATUS_CHANGED", kind, reference, f"{old} -> {target}")
@@ -1642,7 +2209,14 @@ def schedules():
                 "danger",
             )
             return redirect(url_for("schedules"))
-        ensure_ownership(owner)
+        ensur
+        
+        
+        
+        
+        
+
+        e_ownership(owner)
         item = Schedule(
             related_type=related_type,
             related_id=related_id,
@@ -2101,9 +2675,45 @@ def configuration():
                 item.name = name
                 item.description = request.form.get("description", "").strip() or None
                 item.requirements = request.form.get("requirements", "").strip() or None
+                item.processing_time = request.form.get("processing_time", "").strip() or None
                 item.fee = parse_money(request.form.get("fee"))
                 item.fee_is_configured = True
                 item.is_active = _active_from_form()
+                db.session.add(item)
+            elif kind == "requirement":
+                permit_type_id = request.form.get("permit_type_id", type=int)
+                if not permit_type_id or not db.session.get(PermitType, permit_type_id):
+                    raise ValueError("Select a valid Permit Service.")
+                item = db.session.get(ServiceRequirement, record_id) if record_id else ServiceRequirement()
+                if not item:
+                    raise ValueError("Requirement definition not found.")
+                requirement_type = request.form.get("requirement_type", "Document")
+                if requirement_type not in {"Document", "Text", "System Check"}:
+                    raise ValueError("Select a valid requirement type.")
+                item.permit_type_id = permit_type_id
+                item.name = name
+                item.requirement_type = requirement_type
+                item.instructions = request.form.get("instructions", "").strip() or None
+                item.is_required = request.form.get("is_required") == "1"
+                item.is_active = _active_from_form()
+                item.position = request.form.get("position", type=int) or 0
+                db.session.add(item)
+            elif kind == "signatory":
+                permit_type_id = request.form.get("permit_type_id", type=int)
+                if not permit_type_id or not db.session.get(PermitType, permit_type_id):
+                    raise ValueError("Select a valid Permit Service.")
+                item = PermitSignatory.query.filter_by(permit_type_id=permit_type_id).first()
+                if not item:
+                    item = PermitSignatory(permit_type_id=permit_type_id)
+                signature = save_signature_upload()
+                if not signature and not item.file_path:
+                    raise ValueError("Upload the authorized electronic signature image.")
+                item.authorized_admin_id = actor().id
+                item.name = name
+                item.title = request.form.get("title", "").strip()
+                if not item.name or not item.title:
+                    raise ValueError("Enter the authorized signatory name and title.")
+                item.file_path = signature or item.file_path
                 db.session.add(item)
             elif kind == "event" and name:
                 item = db.session.get(EventCategory, record_id) if record_id else EventCategory()
@@ -2172,7 +2782,7 @@ def configuration():
                 raise ValueError("Complete the required configuration fields.")
             db.session.flush()
             audit(
-                "CONFIGURATION_CHANGED",
+                "SERVICE_PRICE_UPDATED" if kind in {"permit", "event"} else "REQUIREMENT_CONFIGURATION_UPDATED" if kind == "requirement" else "CONFIGURATION_CHANGED",
                 "configuration",
                 str(item.id) if item else None,
                 f"kind={kind}",
@@ -2192,6 +2802,8 @@ def configuration():
     return render_template(
         "configuration.html",
         permit_types=PermitType.query.order_by(PermitType.name).all(),
+        service_requirements=ServiceRequirement.query.order_by(ServiceRequirement.permit_type_id, ServiceRequirement.position, ServiceRequirement.id).all(),
+        signatories=PermitSignatory.query.order_by(PermitSignatory.permit_type_id).all(),
         event_categories=EventCategory.query.order_by(EventCategory.name).all(),
         venues=EventVenue.query.order_by(EventVenue.name).all(),
         resident_types=ResidentType.query.order_by(ResidentType.name).all(),

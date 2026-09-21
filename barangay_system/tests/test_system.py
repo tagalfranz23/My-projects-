@@ -649,8 +649,13 @@ class SystemAcceptanceTests(unittest.TestCase):
                 permit_type_id=self.ids["permit_type"],
                 purpose="Editable document test",
                 fee_at_submission=Decimal("50.00"),
-                status="Approved",
+                status="Ready for Pickup",
                 decision_date=datetime.utcnow(),
+                signed_by=self.ids["admin"],
+                signed_at=datetime.utcnow(),
+                signature_path="test-signature.png",
+                signatory_name="Authorized Test Official",
+                signatory_title="Barangay Captain",
             )
             event = EventRequest(
                 requester_id=self.ids["resident"],

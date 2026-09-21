@@ -19,6 +19,7 @@
       <div class="field"><label>Description</label><textarea name="description"></textarea></div>
       <div class="field"><label>Requirements / What to Bring</label><textarea name="requirements"></textarea></div>
       <div class="field"><label>Actual Fee</label><input type="number" name="fee" min="0" step=".01" required></div>
+      <div class="field"><label>Estimated Processing Time</label><input name="processing_time" placeholder="Example: 1–3 business days"></div>
       <button class="btn btn-primary" type="submit">Add Permit Type</button>
     </form>
     {% for r in permit_types %}
@@ -32,6 +33,7 @@
           <div class="field"><label>Description</label><textarea name="description">{{ r.description or '' }}</textarea></div>
           <div class="field"><label>Requirements</label><textarea name="requirements">{{ r.requirements or '' }}</textarea></div>
           <div class="field"><label>Actual Fee</label><input type="number" name="fee" min="0" step=".01" value="{{ r.fee if r.fee is not none else '' }}" required></div>
+          <div class="field"><label>Estimated Processing Time</label><input name="processing_time" value="{{ r.processing_time or '' }}"></div>
           <label class="check-label"><input type="checkbox" name="is_active" value="1" {{ 'checked' if r.is_active }}><input type="hidden" name="is_active" value="0"> Active</label>
           <button class="btn btn-sm btn-outline" type="submit">Save Permit Type</button>
         </form>
@@ -158,6 +160,37 @@
     {% endfor %}
   </div>
 </section>
+
+<div class="grid-2">
+  <section class="card">
+    <span class="eyebrow">Administrator only</span>
+    <h2>Dynamic Permit Requirements</h2>
+    <p class="muted">These definitions apply to future applications. Submitted applications keep their own requirement snapshot.</p>
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="kind" value="requirement">
+      <div class="field"><label>Permit Service</label><select name="permit_type_id" required><option value="">Select service</option>{% for service in permit_types %}<option value="{{ service.id }}">{{ service.name }}</option>{% endfor %}</select></div>
+      <div class="field"><label>Requirement Name</label><input name="name" required></div>
+      <div class="form-row"><div class="field"><label>Type</label><select name="requirement_type"><option>Document</option><option>Text</option><option>System Check</option></select></div><div class="field"><label>Order</label><input type="number" min="0" name="position" value="0"></div></div>
+      <div class="field"><label>Instructions</label><textarea name="instructions"></textarea></div>
+      <label class="check-label"><input type="checkbox" name="is_required" value="1" checked> Required</label>
+      <button class="btn btn-primary" type="submit">Add Requirement</button>
+    </form>
+    {% for requirement in service_requirements %}
+      <details class="catalog-item"><summary>{{ requirement.permit_type.name }} · {{ requirement.name }} · {{ 'Required' if requirement.is_required else 'Optional' }}</summary>
+        <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="kind" value="requirement"><input type="hidden" name="record_id" value="{{ requirement.id }}">
+          <div class="field"><label>Permit Service</label><select name="permit_type_id">{% for service in permit_types %}<option value="{{ service.id }}" {{ 'selected' if service.id==requirement.permit_type_id }}>{{ service.name }}</option>{% endfor %}</select></div>
+          <div class="field"><label>Name</label><input name="name" value="{{ requirement.name }}" required></div><div class="form-row"><div class="field"><label>Type</label><select name="requirement_type">{% for type in ['Document','Text','System Check'] %}<option {{ 'selected' if type==requirement.requirement_type }}>{{ type }}</option>{% endfor %}</select></div><div class="field"><label>Order</label><input type="number" min="0" name="position" value="{{ requirement.position }}"></div></div>
+          <div class="field"><label>Instructions</label><textarea name="instructions">{{ requirement.instructions or '' }}</textarea></div><label class="check-label"><input type="checkbox" name="is_required" value="1" {{ 'checked' if requirement.is_required }}> Required</label><label class="check-label"><input type="checkbox" name="is_active" value="1" {{ 'checked' if requirement.is_active }}><input type="hidden" name="is_active" value="0"> Active</label><button class="btn btn-sm btn-outline" type="submit">Save Requirement</button>
+        </form>
+      </details>
+    {% else %}<p class="empty-state">No dynamic requirements are configured yet.</p>{% endfor %}
+  </section>
+  <section class="card">
+    <span class="eyebrow">Administrator only</span><h2>Authorized Electronic Signatories</h2><p class="muted">A protected scanned signature image is an electronic signature. It is used only during official Permit document generation.</p>
+    <form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="kind" value="signatory"><div class="field"><label>Permit Service</label><select name="permit_type_id" required><option value="">Select service</option>{% for service in permit_types %}<option value="{{ service.id }}">{{ service.name }}</option>{% endfor %}</select></div><div class="field"><label>Authorized Name</label><input name="name" required></div><div class="field"><label>Position / Title</label><input name="title" required></div><div class="field"><label>Signature Image</label><input type="file" name="signature_file" accept=".png,.jpg,.jpeg" required></div><button class="btn btn-primary" type="submit">Save Signatory</button></form>
+    {% for signatory in signatories %}<div class="catalog-item"><strong>{{ signatory.permit_type.name }}</strong><br>{{ signatory.name }} · {{ signatory.title }}</div>{% else %}<p class="empty-state">No authorized signatory configured.</p>{% endfor %}
+  </section>
+</div>
 
 <section class="card">
   <span class="eyebrow">Submission Acknowledgments</span>

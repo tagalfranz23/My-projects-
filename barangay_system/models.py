@@ -181,6 +181,7 @@ class PermitType(db.Model, TimestampMixin):
     name = db.Column(db.String(120), nullable=False, unique=True)
     description = db.Column(db.Text)
     requirements = db.Column(db.Text)
+    processing_time = db.Column(db.String(180))
     fee = db.Column(db.Numeric(10, 2))
     fee_is_configured = db.Column(db.Boolean, nullable=False, default=False)
     validity_days = db.Column(db.Integer, default=365)
@@ -237,11 +238,121 @@ class PermitApplication(db.Model, TimestampMixin):
     remarks = db.Column(db.Text)
     permit_file_path = db.Column(db.String(255))
     attachment_path = db.Column(db.String(255))
+    request_source = db.Column(db.String(30), nullable=False, default="Online", index=True)
+    encoded_by_staff_id = db.Column(db.Integer, db.ForeignKey("users.id"), index=True)
+    office_name = db.Column(db.String(150))
+    endorsed_by = db.Column(db.Integer, db.ForeignKey("users.id"), index=True)
+    endorsed_at = db.Column(db.DateTime)
+    endorsement_note = db.Column(db.Text)
+    signed_by = db.Column(db.Integer, db.ForeignKey("users.id"), index=True)
+    signed_at = db.Column(db.DateTime)
+    signatory_name = db.Column(db.String(150))
+    signatory_title = db.Column(db.String(150))
+    signature_path = db.Column(db.String(255))
+    document_version = db.Column(db.Integer, nullable=False, default=0)
+    payment_confirmed_at = db.Column(db.DateTime)
+    payment_confirmed_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    payment_reference = db.Column(db.String(120))
+    released_by = db.Column(db.Integer, db.ForeignKey("users.id"), index=True)
+    released_at = db.Column(db.DateTime)
 
     applicant = db.relationship(
         "User", foreign_keys=[applicant_id], backref="permit_applications"
     )
     permit_type = db.relationship("PermitType")
+    requirement_records = db.relationship(
+        "ApplicationRequirement", back_populates="application", order_by="ApplicationRequirement.id"
+    )
+
+    @property
+    def required_requirements_verified(self):
+        return all(
+            record.status == "Verified" for record in self.requirement_records if record.is_required
+        )
+
+    @property
+    def is_signed(self):
+        return bool(self.signed_at and self.signed_by and self.signature_path)
+
+
+class ServiceRequirement(db.Model, TimestampMixin):
+    """Administrator-owned requirement definitions for a permit service."""
+
+    __tablename__ = "service_requirements"
+    id = db.Column(db.Integer, primary_key=True)
+    permit_type_id = db.Column(
+        db.Integer, db.ForeignKey("permit_types.id"), nullable=False, index=True
+    )
+    name = db.Column(db.String(180), nullable=False)
+    requirement_type = db.Column(db.String(30), nullable=False, default="Document")
+    instructions = db.Column(db.Text)
+    is_required = db.Column(db.Boolean, nullable=False, default=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    position = db.Column(db.Integer, nullable=False, default=0)
+    permit_type = db.relationship("PermitType", backref="service_requirements")
+    __table_args__ = (db.UniqueConstraint("permit_type_id", "name"),)
+
+
+class ApplicationRequirement(db.Model):
+    """Immutable requirement snapshot and current review state for one request."""
+
+    __tablename__ = "application_requirements"
+    id = db.Column(db.Integer, primary_key=True)
+    application_id = db.Column(
+        db.Integer, db.ForeignKey("permit_applications.id"), nullable=False, index=True
+    )
+    definition_id = db.Column(db.Integer, db.ForeignKey("service_requirements.id"), nullable=False)
+    name = db.Column(db.String(180), nullable=False)
+    requirement_type = db.Column(db.String(30), nullable=False)
+    instructions = db.Column(db.Text)
+    is_required = db.Column(db.Boolean, nullable=False)
+    status = db.Column(db.String(30), nullable=False, default="Not Submitted", index=True)
+    value = db.Column(db.Text)
+    file_path = db.Column(db.String(255))
+    submitted_at = db.Column(db.DateTime)
+    reviewed_by = db.Column(db.Integer, db.ForeignKey("users.id"), index=True)
+    reviewed_at = db.Column(db.DateTime)
+    review_note = db.Column(db.Text)
+    application = db.relationship("PermitApplication", back_populates="requirement_records")
+    reviewer = db.relationship("User", foreign_keys=[reviewed_by])
+    definition = db.relationship("ServiceRequirement")
+    history = db.relationship("RequirementHistory", back_populates="requirement", order_by="RequirementHistory.id")
+    __table_args__ = (db.UniqueConstraint("application_id", "definition_id"),)
+
+
+class RequirementHistory(db.Model):
+    """Append-only upload and review events, preserving replacement evidence."""
+
+    __tablename__ = "requirement_history"
+    id = db.Column(db.Integer, primary_key=True)
+    requirement_id = db.Column(
+        db.Integer, db.ForeignKey("application_requirements.id"), nullable=False, index=True
+    )
+    actor_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    actor_role = db.Column(db.String(20), nullable=False)
+    status = db.Column(db.String(30), nullable=False)
+    note = db.Column(db.Text)
+    file_path = db.Column(db.String(255))
+    value = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    requirement = db.relationship("ApplicationRequirement", back_populates="history")
+    actor = db.relationship("User", foreign_keys=[actor_id])
+
+
+class PermitSignatory(db.Model, TimestampMixin):
+    """Restricted electronic-signature configuration for an authorized admin."""
+
+    __tablename__ = "permit_signatories"
+    id = db.Column(db.Integer, primary_key=True)
+    permit_type_id = db.Column(
+        db.Integer, db.ForeignKey("permit_types.id"), nullable=False, unique=True
+    )
+    authorized_admin_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    name = db.Column(db.String(150), nullable=False)
+    title = db.Column(db.String(150), nullable=False)
+    file_path = db.Column(db.String(255), nullable=False)
+    permit_type = db.relationship("PermitType")
+    authorized_admin = db.relationship("User", foreign_keys=[authorized_admin_id])
 
 
 class EventRequest(db.Model, TimestampMixin):
@@ -477,10 +588,129 @@ class Announcement(db.Model, TimestampMixin):
     title = db.Column(db.String(180), nullable=False)
     body = db.Column(db.Text, nullable=False)
     is_published = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    status = db.Column(db.String(20), nullable=False, default="Draft", index=True)
+    approved_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    approved_at = db.Column(db.DateTime)
     published_at = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
     expires_at = db.Column(db.DateTime)
     created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     author = db.relationship("User", foreign_keys=[created_by])
+
+
+class QueueEntry(db.Model, TimestampMixin):
+    __tablename__ = "queue_entries"
+    __table_args__ = (db.UniqueConstraint("queue_date", "queue_number"),)
+
+    id = db.Column(db.Integer, primary_key=True)
+    queue_date = db.Column(db.Date, nullable=False, index=True)
+    queue_number = db.Column(db.String(30), nullable=False)
+    category = db.Column(db.String(80), nullable=False)
+    resident_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    permit_application_id = db.Column(db.Integer, db.ForeignKey("permit_applications.id"), index=True)
+    status = db.Column(db.String(20), nullable=False, default="Waiting", index=True)
+    priority_category = db.Column(db.String(80))
+    called_at = db.Column(db.DateTime)
+    served_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    resident = db.relationship("User", foreign_keys=[resident_id])
+    creator = db.relationship("User", foreign_keys=[created_by])
+    permit_application = db.relationship("PermitApplication")
+
+
+class RequestAssignment(db.Model, TimestampMixin):
+    __tablename__ = "request_assignments"
+    id = db.Column(db.Integer, primary_key=True)
+    permit_application_id = db.Column(db.Integer, db.ForeignKey("permit_applications.id"), nullable=False, index=True)
+    assigned_to_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    assigned_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="Active", index=True)
+    note = db.Column(db.Text)
+    assigned_to = db.relationship("User", foreign_keys=[assigned_to_user_id])
+    assigner = db.relationship("User", foreign_keys=[assigned_by])
+    permit_application = db.relationship("PermitApplication")
+
+
+class GeneralConcern(db.Model, TimestampMixin):
+    __tablename__ = "general_concerns"
+    id = db.Column(db.Integer, primary_key=True)
+    reference_no = db.Column(db.String(40), unique=True, nullable=False, default=lambda: make_reference("CON"))
+    resident_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    category = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    location = db.Column(db.String(255))
+    sensitivity_level = db.Column(db.String(20), nullable=False, default="Standard", index=True)
+    assigned_to = db.Column(db.Integer, db.ForeignKey("users.id"))
+    status = db.Column(db.String(30), nullable=False, default="Filed", index=True)
+    encoded_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    resident = db.relationship("User", foreign_keys=[resident_id])
+    encoder = db.relationship("User", foreign_keys=[encoded_by])
+
+
+class ResidentUpdateRequest(db.Model, TimestampMixin):
+    __tablename__ = "resident_update_requests"
+    id = db.Column(db.Integer, primary_key=True)
+    resident_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    field_name = db.Column(db.String(80), nullable=False)
+    old_value = db.Column(db.Text)
+    proposed_value = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="Pending", index=True)
+    reviewed_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    reviewed_at = db.Column(db.DateTime)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    resident = db.relationship("User", foreign_keys=[resident_id])
+    reviewer = db.relationship("User", foreign_keys=[reviewed_by])
+
+
+class Household(db.Model, TimestampMixin):
+    __tablename__ = "households"
+    id = db.Column(db.Integer, primary_key=True)
+    household_number = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    address = db.Column(db.String(255))
+    head_resident_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    status = db.Column(db.String(20), nullable=False, default="Active", index=True)
+    head_resident = db.relationship("User", foreign_keys=[head_resident_id])
+    members = db.relationship("HouseholdMember", back_populates="household")
+
+
+class HouseholdMember(db.Model, TimestampMixin):
+    __tablename__ = "household_members"
+    __table_args__ = (db.UniqueConstraint("household_id", "resident_id"),)
+    id = db.Column(db.Integer, primary_key=True)
+    household_id = db.Column(db.Integer, db.ForeignKey("households.id"), nullable=False, index=True)
+    resident_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    membership_status = db.Column(db.String(20), nullable=False, default="Active", index=True)
+    joined_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    left_at = db.Column(db.DateTime)
+    household = db.relationship("Household", back_populates="members")
+    resident = db.relationship("User", foreign_keys=[resident_id])
+
+
+class AssistanceReferral(db.Model, TimestampMixin):
+    __tablename__ = "assistance_referrals"
+    id = db.Column(db.Integer, primary_key=True)
+    reference_no = db.Column(db.String(40), unique=True, nullable=False, default=lambda: make_reference("ASR"))
+    resident_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    category = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    assigned_to = db.Column(db.Integer, db.ForeignKey("users.id"))
+    status = db.Column(db.String(30), nullable=False, default="Open", index=True)
+    sensitivity_level = db.Column(db.String(20), nullable=False, default="Restricted")
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    resident = db.relationship("User", foreign_keys=[resident_id])
+    creator = db.relationship("User", foreign_keys=[created_by])
+
+
+class ResidentFeedback(db.Model, TimestampMixin):
+    __tablename__ = "resident_feedback"
+    __table_args__ = (db.UniqueConstraint("resident_id", "permit_application_id"),)
+    id = db.Column(db.Integer, primary_key=True)
+    resident_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    permit_application_id = db.Column(db.Integer, db.ForeignKey("permit_applications.id"), nullable=False, index=True)
+    rating = db.Column(db.Integer, nullable=False)
+    comment = db.Column(db.Text)
+    resident = db.relationship("User", foreign_keys=[resident_id])
+    permit_application = db.relationship("PermitApplication")
 
 
 def log_activity(

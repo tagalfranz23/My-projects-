@@ -11,11 +11,18 @@ ROLE_PERMISSIONS = {
     },
     "staff": {
         "profile": {"view", "edit"}, "users": {"view"},
-        "permit": {"view", "review", "endorse"},
-        "event": {"view", "review", "endorse"},
-        "blotter": {"view", "create", "review", "endorse", "edit"},
+        # Staff members retain operational access and use the same legitimate
+        # account for their own resident transactions. Route-level ownership
+        # checks prevent them from processing a request they submitted.
+        "permit": {"view", "view_own", "create", "review", "endorse"},
+        "event": {"view", "view_own", "create", "review", "endorse"},
+        "blotter": {"view", "view_own", "create", "review", "endorse", "edit"},
         "schedule": {"view", "create", "edit", "confirm"},
-        "notification": {"view", "create"}, "announcement": {"view"}, "work_summary": {"view"},
+        "notification": {"view", "create"}, "announcement": {"view"},
+        "status": {"view_own"}, "work_summary": {"view"},
+        "front_desk": {"view", "manage"}, "concern": {"create", "view", "route"},
+        "resident_update": {"create", "view"}, "household": {"view", "manage"},
+        "referral": {"create", "view"},
     },
     "admin": {"*": {"*"}},
 }
@@ -48,12 +55,14 @@ def navigation_for(role):
         ],
         "staff": [
             ("Announcements", "announcements", "◉"),
+            ("Resident Services", "front_desk", "☆"),
             ("Permit Processing", "permits", "▣"), ("Event Approval", "events", "☆"),
             ("Blotter Management", "blotters", "⚖"), ("Scheduling", "schedules", "◷"),
             ("Read-only Users", "users", "♙"),
         ],
         "admin": [
             ("Announcements", "announcements", "◉"),
+            ("Resident Services", "front_desk", "☆"),
             ("1.0 User Management", "users", "♙"), ("2.0 Permit Processing", "permits", "▣"),
             ("3.0 Event Approval", "events", "☆"), ("4.0 Blotter Management", "blotters", "⚖"),
             ("5.0 Schedules", "schedules", "◷"), ("Notifications", "notifications", "♢"),

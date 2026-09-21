@@ -3,7 +3,11 @@ TRANSITIONS = {
     "permit": {
         "staff": {"Pending": {"Under Review"}, "Under Review": {"Endorsed to Admin"}},
         "admin": {"Pending": {"Under Review", "Cancelled"}, "Under Review": {"Endorsed to Admin", "Rejected"},
-                  "Endorsed to Admin": {"Approved", "Rejected"}, "Approved": {"Ready for Pickup"},
+                  "Endorsed to Admin": {"Approved", "Rejected"},
+                  # Release readiness is set only by the signed-permit/payment routes.
+                  # Keeping it out of the generic status form prevents bypassing the
+                  # required electronic-signature and manual-payment safeguards.
+                  "Approved": set(),
                   "Ready for Pickup": {"Completed"}},
     },
     "event": {

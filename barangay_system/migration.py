@@ -65,6 +65,7 @@ ADDITIONS = {
         "updated_at": "DATETIME",
     },
     "permit_types": {
+        "processing_time": "VARCHAR(180)",
         "created_at": "DATETIME",
         "updated_at": "DATETIME",
         "fee_is_configured": "BOOLEAN NOT NULL DEFAULT 0",
@@ -84,6 +85,23 @@ ADDITIONS = {
         "updated_at": "DATETIME",
     },
     "permit_applications": {
+        "request_source": "VARCHAR(30) NOT NULL DEFAULT 'Online'",
+        "encoded_by_staff_id": "INTEGER",
+        "office_name": "VARCHAR(150)",
+        "endorsed_by": "INTEGER",
+        "endorsed_at": "DATETIME",
+        "endorsement_note": "TEXT",
+        "signed_by": "INTEGER",
+        "signed_at": "DATETIME",
+        "signatory_name": "VARCHAR(150)",
+        "signatory_title": "VARCHAR(150)",
+        "signature_path": "VARCHAR(255)",
+        "document_version": "INTEGER NOT NULL DEFAULT 0",
+        "payment_confirmed_at": "DATETIME",
+        "payment_confirmed_by": "INTEGER",
+        "payment_reference": "VARCHAR(120)",
+        "released_by": "INTEGER",
+        "released_at": "DATETIME",
         "created_at": "DATETIME",
         "updated_at": "DATETIME",
         "reviewed_by": "INTEGER",
@@ -127,7 +145,12 @@ ADDITIONS = {
         "updated_at": "DATETIME",
     },
     "reports": {"filters_json": "TEXT"},
-    "announcements": {"updated_at": "DATETIME"},
+    "announcements": {
+        "updated_at": "DATETIME",
+        "status": "VARCHAR(20) NOT NULL DEFAULT 'Draft'",
+        "approved_by": "INTEGER",
+        "approved_at": "DATETIME",
+    },
 }
 
 

@@ -295,12 +295,35 @@ def generate_submission_acknowledgment(
     return _to_stream(document)
 
 
+def generate_walkin_claim_stub(application, queue_entry, barangay_name="Barangay Minante 1"):
+    """Generate a filing/queue stub; it is never a payment receipt or Permit."""
+    document = _prepare_document(
+        f"Walk-in Claim Stub {application.reference_no}",
+        "Walk-in filing and queue reference",
+        barangay_name,
+    )
+    _add_barangay_header(document, barangay_name, "Cauayan City, Isabela", "WALK-IN CLAIM STUB")
+    _add_reference_box(document, application.reference_no)
+    _add_details_table(document, [
+        ("Resident", application.applicant.full_name),
+        ("Service", application.permit_type.name),
+        ("Queue Number", queue_entry.queue_number),
+        ("Fee at Submission", _money(application.fee_at_submission)),
+        ("Filing Status", application.status),
+        ("Important", "This is a claim stub and proof of filing. It is not a payment receipt or approved Permit."),
+    ])
+    return _to_stream(document)
+
+
 def generate_approved_permit_document(
     application,
     applicant,
     permit_type,
     barangay_name="Barangay Minante 1",
     city="Cauayan City, Isabela",
+    signatory_name=None,
+    signatory_title=None,
+    signature_file=None,
 ):
     """Return an approved permit as an editable DOCX stream."""
     reference = application.reference_no
@@ -341,12 +364,25 @@ def generate_approved_permit_document(
     )
 
     document.add_paragraph()
-    signatures = document.add_table(rows=2, cols=2)
+    signatures = document.add_table(rows=3 if signature_file else 2, cols=2)
     signatures.alignment = WD_TABLE_ALIGNMENT.CENTER
     signatures.cell(0, 0).text = "____________________________"
     signatures.cell(0, 1).text = "____________________________"
     signatures.cell(1, 0).text = "Applicant's Signature"
-    signatures.cell(1, 1).text = "Barangay Captain / Authorized Official"
+    signatures.cell(1, 1).text = _text(signatory_title, "Authorized Barangay Official")
+    if signature_file:
+        try:
+            signature_paragraph = signatures.cell(2, 1).paragraphs[0]
+            signature_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            signature_paragraph.add_run().add_picture(signature_file, width=Inches(1.35))
+            signatures.cell(2, 0).text = ""
+        except (OSError, ValueError):
+            # The signed record remains traceable even if an image is later unavailable.
+            signatures.cell(2, 1).text = "Electronic signature on record"
+    name = document.add_paragraph()
+    name.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    name.add_run(_text(signatory_name, "Authorized official")).bold = True
+    name.add_run("\nElectronic signature applied by the authorized Barangay official.")
     for row in signatures.rows:
         for cell in row.cells:
             cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
