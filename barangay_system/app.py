@@ -2440,14 +2440,18 @@ def user_verification(record_id, kind):
     action = request.form.get("action")
     reason = request.form.get("reason", "").strip()
     if item.role != "resident" or not profile or kind not in {"id", "address"}:
-        abort(400, "Invalid verification request.")
+        flash("This account is not eligible for resident verification.", "warning")
+        return redirect(url_for("users"))
     if action not in {"verify", "reject"}:
-        abort(400, "Choose Verify or Reject.")
+        flash("Choose Verify or Reject.", "warning")
+        return redirect(url_for("user_review", record_id=item.id))
     if action == "reject" and not reason:
-        abort(400, "Provide a safe correction reason when rejecting verification.")
+        flash("Provide a safe correction reason when rejecting verification.", "warning")
+        return redirect(url_for("user_review", record_id=item.id))
     if kind == "id":
         if action == "verify" and not profile.valid_id_file_path:
-            abort(400, "A valid ID file is required before it can be verified.")
+            flash("No uploaded valid ID is available. Ask the resident to upload or replace their ID before verification.", "warning")
+            return redirect(url_for("user_review", record_id=item.id))
         profile.id_verification_status = "Verified" if action == "verify" else "Rejected"
         profile.id_verified_by = actor().id
         profile.id_verified_at = now()
