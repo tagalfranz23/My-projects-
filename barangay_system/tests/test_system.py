@@ -184,6 +184,33 @@ class SystemAcceptanceTests(unittest.TestCase):
         payload.setdefault("csrf_token", csrf_token)
         return self.client.post(url, data=payload, follow_redirects=follow_redirects)
 
+    def test_front_desk_handles_unconfigured_fees_and_preserves_access_rules(self):
+        with app.app_context():
+            service = PermitType(name="Service Awaiting Pricing", fee=None, fee_is_configured=False)
+            db.session.add(service)
+            db.session.commit()
+            unconfigured_id = service.id
+
+        for role in ("admin", "staff"):
+            with self.subTest(role=role):
+                self.auth(role)
+                response = self.client.get("/front-desk")
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(b"Fee not configured", response.data)
+                self.assertIn(b"50.00", response.data)
+                response = self.post("/front-desk", {
+                    "resident_id": str(self.ids["resident"]),
+                    "permit_type_id": str(unconfigured_id),
+                    "purpose": "Unconfigured service must remain unavailable",
+                })
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(b"Administrator configures its fee", response.data)
+                with app.app_context():
+                    self.assertEqual(PermitApplication.query.count(), 0)
+
+        self.auth("resident")
+        self.assertEqual(self.client.get("/front-desk").status_code, 403)
+
     def registration_data(self, username="newresident", email="new@test.local"):
         return {
             "full_name": "New Resident",
