@@ -2209,14 +2209,7 @@ def schedules():
                 "danger",
             )
             return redirect(url_for("schedules"))
-        ensur
-        
-        
-        
-        
-        
-
-        e_ownership(owner)
+        ensure_ownership(owner)
         item = Schedule(
             related_type=related_type,
             related_id=related_id,
