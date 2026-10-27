@@ -1,0 +1,21 @@
+<input type="hidden" name="family_information" value="1">
+{% set head_answer=request.form.get('is_family_head', ('Yes' if profile.is_household_head else 'No') if profile else '') %}
+{% set registration_form=registration_form|default(false) %}
+{% set disability_answer=request.form.get('has_disability', ('Prefer not to say' if profile.disability_declined else ('Yes' if profile.has_disability else 'No')) if profile and (profile.disability_declined or profile.has_disability is not none) else '') %}
+{% set selected_disability=request.form.get('disability_type', profile.disability_type if profile and profile.disability_type else '') %}
+<section data-resident-family>
+<h2>Family Information</h2><p class="muted">Confidential information for authorized Barangay personnel. Family members do not receive login accounts.</p>
+<div class="field"><label for="is_family_head">Are you the Head of the Family?</label><select id="is_family_head" name="is_family_head" required><option value="">Choose an answer</option>{% for answer in ['Yes','No'] %}<option value="{{ answer }}" {{ 'selected' if head_answer==answer }}>{{ answer }}</option>{% endfor %}</select></div>
+<section id="familyMembersSection" {% if head_answer!='Yes' %}hidden{% endif %}>
+<h3>Family Members</h3><p>{% if registration_form %}Enter each family member's full name, date of birth, and relationship to you.{% else %}Update saved details or add a family member with their name, age, and gender.{% endif %} Saved entries are preserved when this section is hidden or omitted.</p>
+<div id="familyMemberRows">{% for member in family_rows %}
+{% include '_family_member_row.html' %}{% endfor %}</div>
+<button class="btn btn-outline" type="button" id="addFamilyMember">Add Family Member</button>
+</section>
+<h2>Resident Disability Information</h2><p>Disability details are optional and visible only to authorized personnel. Choose Prefer not to say if you do not wish to disclose this information.</p>
+<div class="field"><label for="has_disability">{{ 'Do you have a disability?' if registration_form else 'Does this resident have a disability?' }}</label><select id="has_disability" name="has_disability" required><option value="">Choose an answer</option>{% for answer in ['Yes','No','Prefer not to say'] %}<option value="{{ answer }}" {{ 'selected' if disability_answer==answer }}>{{ answer }}</option>{% endfor %}</select></div>
+<div id="residentDisabilityType" {% if disability_answer!='Yes' %}hidden{% endif %}><div class="field"><label for="disability_type">Disability type (optional)</label><select id="disability_type" name="disability_type"><option value="">Prefer not to specify a type</option>{% for kind in disability_types %}<option value="{{ kind }}" {{ 'selected' if selected_disability==kind }}>{{ kind }}</option>{% endfor %}</select></div>
+<div class="field" id="residentDisabilityOther" {% if selected_disability!='Other' %}hidden{% endif %}><label for="disability_other">Specify disability type (optional)</label><input id="disability_other" name="disability_other" maxlength="300" value="{{ request.form.get('disability_other', profile.disability_other if profile and profile.disability_other else '') }}"></div></div>
+</section>
+<template id="familyMemberTemplate">{% set member={'id':none,'full_name':'','age':'','gender':'','date_of_birth':'','relationship':''} %}{% include '_family_member_row.html' %}</template>
+<script src="{{ url_for('static',filename='js/resident-family.js') }}"></script>

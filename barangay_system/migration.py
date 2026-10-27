@@ -1,18 +1,22 @@
 """Non-destructive, idempotent SQLite schema upgrades.
 
-The migration only creates missing tables, columns, and ORM-declared indexes;
-it never drops/recreates users or operational records.
+The migration creates missing tables, columns, and ORM-declared indexes.
+The family-member leaf table can be rebuilt transactionally to relax legacy
+constraints, preserving all columns and records. Users and service records
+are never dropped or recreated.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import inspect, text
+from sqlalchemy.schema import CreateTable
 
 from models import ResidentProfile, User, db
 
 
 ADDITIONS = {
-    "users": {"updated_at": "DATETIME"},
+    "users": {"updated_at": "DATETIME", "online_access_enabled": "BOOLEAN NOT NULL DEFAULT 1"},
+    "queue_entries": {"related_type": "VARCHAR(20)", "related_id": "INTEGER"},
     "resident_types": {
         "description": "TEXT",
         "is_active": "BOOLEAN NOT NULL DEFAULT 1",
@@ -38,6 +42,10 @@ ADDITIONS = {
         "years_of_residency": "INTEGER",
         "occupation": "VARCHAR(150)",
         "is_household_head": "BOOLEAN NOT NULL DEFAULT 0",
+        "has_disability": "BOOLEAN",
+        "disability_declined": "BOOLEAN NOT NULL DEFAULT 0",
+        "disability_type": "VARCHAR(50)",
+        "disability_other": "VARCHAR(300)",
         "household_number": "VARCHAR(80)",
         "emergency_contact_name": "VARCHAR(150)",
         "emergency_contact_relationship": "VARCHAR(80)",
@@ -63,6 +71,10 @@ ADDITIONS = {
         "approval_notice_seen_at": "DATETIME",
         "created_at": "DATETIME",
         "updated_at": "DATETIME",
+    },
+    "resident_family_members": {
+        "date_of_birth": "DATE",
+        "relationship": "VARCHAR(80)",
     },
     "permit_types": {
         "processing_time": "VARCHAR(180)",
@@ -146,6 +158,10 @@ ADDITIONS = {
     },
     "reports": {"filters_json": "TEXT"},
     "announcements": {
+        "category": "VARCHAR(60) NOT NULL DEFAULT 'General Advisory'",
+        "publish_start_at": "DATETIME",
+        "expired_at": "DATETIME",
+        "program_id": "INTEGER REFERENCES community_programs(id)",
         "updated_at": "DATETIME",
         "status": "VARCHAR(20) NOT NULL DEFAULT 'Draft'",
         "approved_by": "INTEGER",
@@ -176,6 +192,40 @@ def _add_missing_columns():
     return added_columns
 
 
+def _allow_birthdate_family_members():
+    """Preserve legacy rows while allowing birthdate-based intake without gender.
+
+    SQLite cannot relax NOT NULL using ALTER COLUMN. Rebuild only this leaf
+    table inside a savepoint, copying every column and checking the row count.
+    Refuse unexpected schemas rather than silently discard additional columns.
+    """
+    from sqlalchemy import MetaData
+    from models import ResidentFamilyMember
+    columns = inspect(db.session.connection()).get_columns('resident_family_members')
+    if all(column['nullable'] for column in columns if column['name'] in {'age', 'gender'}):
+        return
+    if db.engine.dialect.name != 'sqlite':
+        raise RuntimeError('Family member age/gender nullability needs a database-specific migration.')
+    source = ResidentFamilyMember.__table__
+    if {column['name'] for column in columns} != set(source.columns.keys()):
+        raise RuntimeError('Unexpected family member columns; migration stopped to protect existing data.')
+    metadata = MetaData()
+    for table in db.metadata.sorted_tables:
+        table.to_metadata(metadata)
+    replacement = source.to_metadata(metadata, name='resident_family_members_registration')
+    quote = db.engine.dialect.identifier_preparer.quote
+    fields = ', '.join(quote(column.name) for column in source.columns)
+    with db.session.begin_nested():
+        db.session.execute(CreateTable(replacement))
+        db.session.execute(text(f'INSERT INTO resident_family_members_registration ({fields}) SELECT {fields} FROM resident_family_members'))
+        before = db.session.execute(text('SELECT COUNT(*) FROM resident_family_members')).scalar_one()
+        after = db.session.execute(text('SELECT COUNT(*) FROM resident_family_members_registration')).scalar_one()
+        if before != after:
+            raise RuntimeError('Family member migration row count mismatch.')
+        db.session.execute(text('DROP TABLE resident_family_members'))
+        db.session.execute(text('ALTER TABLE resident_family_members_registration RENAME TO resident_family_members'))
+
+
 def _create_missing_indexes():
     """Create indexes declared by the current ORM after all columns exist."""
     for table in db.metadata.sorted_tables:
@@ -187,6 +237,8 @@ def _normalize_legacy_rows(added_columns=None):
     """Normalize pre-existing values without undoing later Admin decisions."""
     added_columns = added_columns or set()
     tables = set(inspect(db.engine).get_table_names())
+    if "announcements" in tables and ("announcements", "status") in added_columns:
+        db.session.execute(text("UPDATE announcements SET status='Published' WHERE is_published=1"))
     if "blotter_cases" in tables:
         db.session.execute(
             text("UPDATE blotter_cases SET status='Filed' WHERE status='Pending'")
@@ -325,7 +377,7 @@ def _ensure_required_reference_catalogs():
 
 def _create_legacy_profiles():
     """Give pre-revision Resident/Staff accounts approved legacy profiles."""
-    now = datetime.utcnow()
+    now = datetime.now(UTC).replace(tzinfo=None)
     users = User.query.filter(User.role.in_(("resident", "staff"))).all()
     for user in users:
         if user.resident_profile:
@@ -351,6 +403,8 @@ def upgrade_legacy_schema():
         # New tables are created first. create_all never drops existing data.
         db.create_all()
         added_columns = _add_missing_columns()
+        _allow_birthdate_family_members()
+        db.session.commit()
         _create_missing_indexes()
         db.session.commit()
         # Refresh ORM/inspector visibility after DDL before data normalization.

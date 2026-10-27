@@ -1,0 +1,18 @@
+{% extends 'base.html' %}{% block page_title %}New Walk-in Resident{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>New Walk-in Resident</h1><p>No gadget or online account? Our front desk staff can assist you.</p></div><a class="btn btn-outline" href="{{ url_for('front_desk') }}">Back to Front Desk</a></div>
+<section class="card"><p>Search existing residents first. Copy the details from the resident or their paper form. No email, password, or mobile phone is required.</p>
+<form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<div class="grid-2">
+<div class="field"><label for="full_name">Full name *</label><input id="full_name" name="full_name" maxlength="150" value="{{ request.form.get('full_name','') }}" required></div>
+<div class="field"><label for="date_of_birth">Date of birth (if known)</label><input id="date_of_birth" name="date_of_birth" type="date" value="{{ request.form.get('date_of_birth','') }}"></div>
+<div class="field"><label for="address">House number / street *</label><input id="address" name="address" maxlength="180" value="{{ request.form.get('address','') }}" required></div>
+<div class="field"><label for="purok_zone">Purok / zone *</label><input id="purok_zone" name="purok_zone" maxlength="120" value="{{ request.form.get('purok_zone','') }}" required></div>
+<div class="field"><label for="contact_number">Mobile number (optional)</label><input id="contact_number" name="contact_number" type="tel" maxlength="20" value="{{ request.form.get('contact_number','') }}"><small>Leave blank if unavailable. The resident can follow up at the desk using their printed reference.</small></div>
+</div>
+{% include '_resident_family_fields.html' %}
+<h2>Identity document (if available)</h2><p>Staff may scan the resident's paper ID. Verification and approval are completed by the Administrator. An ID can also be added later at the front desk.</p>
+{% include '_walkin_identity_fields.html' %}
+<p><label class="check-label"><input type="checkbox" name="privacy_consent" value="1" required> I explained the privacy notice and recorded the resident's consent to store their details for Barangay services.</label> <a href="{{ url_for('privacy_notice') }}" target="_blank" rel="noopener">Read privacy notice</a></p>
+<button class="btn btn-primary" type="submit">Save Resident and Continue to Service</button>
+</form></section>{% endblock %}

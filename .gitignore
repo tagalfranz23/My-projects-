@@ -23,3 +23,10 @@
 
 # Generated resident documents
 barangay_system/static/permits/*.pdf
+barangay_system/static/permits/*.docx
+**/identifications/
+**/signatures/
+.audit-baseline/
+**/audit-artifacts/
+**/*-audit-output.txt
+**/revision-test-output.txt

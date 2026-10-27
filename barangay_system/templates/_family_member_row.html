@@ -1,0 +1,18 @@
+<div class="card-subtle family-member-row">
+<input type="hidden" name="family_id" value="{{ member.id or '' }}">
+<div class="{{ 'form-row' if registration_form else 'grid-2' }}">
+  <div class="field"><label>Full Name<input name="family_name" maxlength="150" value="{{ member.full_name }}" required></label></div>
+  {% if registration_form or member.date_of_birth %}
+  <div class="field"><label>Date of Birth<input name="family_date_of_birth" type="date" value="{{ member.date_of_birth or '' }}" required></label></div>
+  <div class="field"><label>Relationship to Head of Family<input name="family_relationship" maxlength="80" value="{{ member.relationship or '' }}" placeholder="e.g. Daughter, Son, Spouse" required></label></div>
+  <input name="family_age" type="hidden" value="{{ member.age if member.age is not none else '' }}">
+  <input name="family_gender" type="hidden" value="{{ member.gender or '' }}">
+  {% else %}
+  <input name="family_date_of_birth" type="hidden" value="">
+  <input name="family_relationship" type="hidden" value="">
+  <div class="field"><label>Age<input name="family_age" type="number" min="0" max="120" step="1" value="{{ member.age }}" required></label></div>
+  <div class="field"><label>Gender<select name="family_gender" required><option value="">Choose gender</option>{% for gender in ['Male','Female'] %}<option value="{{ gender }}" {{ 'selected' if member.gender==gender }}>{{ gender }}</option>{% endfor %}</select></label></div>
+  {% endif %}
+</div>
+{% if not member.id %}<button type="button" class="btn btn-outline" data-remove-family>Remove</button>{% else %}<small>Saved member — update the details above. This entry will be retained.</small>{% endif %}
+</div>

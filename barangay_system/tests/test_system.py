@@ -39,7 +39,9 @@ from models import (  # noqa: E402
     Notification,
     PasswordResetToken,
     PermitApplication,
+    Payment,
     PermitType,
+    QueueEntry,
     Report,
     ResidentProfile,
     ResidentType,
@@ -184,33 +186,6 @@ class SystemAcceptanceTests(unittest.TestCase):
         payload.setdefault("csrf_token", csrf_token)
         return self.client.post(url, data=payload, follow_redirects=follow_redirects)
 
-    def test_front_desk_handles_unconfigured_fees_and_preserves_access_rules(self):
-        with app.app_context():
-            service = PermitType(name="Service Awaiting Pricing", fee=None, fee_is_configured=False)
-            db.session.add(service)
-            db.session.commit()
-            unconfigured_id = service.id
-
-        for role in ("admin", "staff"):
-            with self.subTest(role=role):
-                self.auth(role)
-                response = self.client.get("/front-desk")
-                self.assertEqual(response.status_code, 200)
-                self.assertIn(b"Fee not configured", response.data)
-                self.assertIn(b"50.00", response.data)
-                response = self.post("/front-desk", {
-                    "resident_id": str(self.ids["resident"]),
-                    "permit_type_id": str(unconfigured_id),
-                    "purpose": "Unconfigured service must remain unavailable",
-                })
-                self.assertEqual(response.status_code, 200)
-                self.assertIn(b"Administrator configures its fee", response.data)
-                with app.app_context():
-                    self.assertEqual(PermitApplication.query.count(), 0)
-
-        self.auth("resident")
-        self.assertEqual(self.client.get("/front-desk").status_code, 403)
-
     def registration_data(self, username="newresident", email="new@test.local"):
         return {
             "full_name": "New Resident",
@@ -262,6 +237,11 @@ class SystemAcceptanceTests(unittest.TestCase):
     def docx_xml(response):
         with zipfile.ZipFile(BytesIO(response.data)) as archive:
             return archive.read("word/document.xml").decode("utf-8")
+
+    @staticmethod
+    def pdf_text(response):
+        from pypdf import PdfReader
+        return '\n'.join(page.extract_text() for page in PdfReader(BytesIO(response.data)).pages)
 
     def create_permit(self, owner="resident", **values):
         with app.app_context():
@@ -450,6 +430,49 @@ class SystemAcceptanceTests(unittest.TestCase):
         self.assertEqual(self.post(f"/users/{user_id}/verification/id", {"action": "verify"}).status_code, 302)
         self.assertEqual(self.post(f"/users/{user_id}/verification/address", {"action": "verify"}).status_code, 302)
         self.assertEqual(self.post(f"/users/{user_id}/approval", {"action": "approve"}).status_code, 302)
+
+    def test_final_account_decision_is_one_time(self):
+        self.clear_auth()
+        self.assertEqual(
+            self.post("/register", self.registration_data("singledecision", "single@test.local")).status_code,
+            302,
+        )
+        with app.app_context():
+            user_id = User.query.filter_by(username="singledecision").one().id
+        self.auth("admin")
+        self.assertEqual(
+            self.post(f"/users/{user_id}/verification/id", {"action": "verify"}).status_code,
+            302,
+        )
+        self.assertEqual(
+            self.post(f"/users/{user_id}/verification/address", {"action": "verify"}).status_code,
+            302,
+        )
+        self.assertEqual(
+            self.post(f"/users/{user_id}/approval", {"approval_action": "approve"}).status_code,
+            302,
+        )
+        duplicate = self.post(
+            f"/users/{user_id}/approval",
+            {"approval_action": "reject"},
+            follow_redirects=True,
+        )
+        self.assertIn(b"already finalized as Approved", duplicate.data)
+        with app.app_context():
+            profile = db.session.get(User, user_id).resident_profile
+            self.assertEqual(profile.approval_status, "Approved")
+            self.assertEqual(
+                ActivityLog.query.filter_by(
+                    action="ACCOUNT_APPROVED", target_reference=str(user_id)
+                ).count(),
+                1,
+            )
+            self.assertEqual(
+                ActivityLog.query.filter_by(
+                    action="ACCOUNT_REJECTED", target_reference=str(user_id)
+                ).count(),
+                0,
+            )
 
     def test_configured_fees_are_snapshotted_and_unconfigured_services_are_blocked(self):
         self.auth("resident")
@@ -683,6 +706,9 @@ class SystemAcceptanceTests(unittest.TestCase):
                 signature_path="test-signature.png",
                 signatory_name="Authorized Test Official",
                 signatory_title="Barangay Captain",
+                payment_confirmed_at=datetime.utcnow(),
+                payment_confirmed_by=self.ids["admin"],
+                payment_reference="TEST-PAYMENT",
             )
             event = EventRequest(
                 requester_id=self.ids["resident"],
@@ -707,6 +733,10 @@ class SystemAcceptanceTests(unittest.TestCase):
                 narrative="Confidential incident detail",
             )
             db.session.add_all([permit, event, blotter])
+            db.session.flush()
+            db.session.add(Payment(permit_id=permit.id, resident_id=self.ids["resident"],
+                fee_snapshot=Decimal("50.00"), amount_paid=Decimal("50.00"), status="Paid",
+                recorded_by=self.ids["admin"], payment_method="Cash"))
             db.session.commit()
             ids = {"permit": permit.id, "event": event.id, "blotter": blotter.id}
 
@@ -803,7 +833,7 @@ class SystemAcceptanceTests(unittest.TestCase):
         with app.app_context():
             self.assertEqual(Schedule.query.count(), 1)
 
-    def test_report_uses_real_counts_and_exports_only_docx(self):
+    def test_report_uses_real_counts_and_exports_only_pdf(self):
         self.create_permit(owner="resident", status="Pending")
         self.create_permit(owner="other", status="Approved")
         with app.app_context():
@@ -822,19 +852,19 @@ class SystemAcceptanceTests(unittest.TestCase):
         self.assertIn(b"Pending", page.data)
         self.assertIn(b"Approved", page.data)
 
-        report = self.post("/reports/export/docx")
+        report = self.post("/reports/export/pdf")
         self.assertEqual(report.status_code, 200)
-        self.assertEqual(report.mimetype, DOCX_MIMETYPE)
-        self.assertEqual(report.data[:2], b"PK")
-        report_xml = self.docx_xml(report)
-        self.assertIn("BARANGAY SYSTEM MONITORING REPORT", report_xml)
+        self.assertEqual(report.mimetype, "application/pdf")
+        self.assertTrue(report.data.startswith(b"%PDF-"))
+        report_xml = self.pdf_text(report)
+        self.assertIn("Overall Barangay Report", report_xml)
         self.assertIn("Pending", report_xml)
         self.assertIn("Approved", report_xml)
         with app.app_context():
             saved = Report.query.one()
             self.assertEqual(saved.generated_by, self.ids["admin"])
-            self.assertEqual(saved.format, "docx")
-        self.assertEqual(self.post("/reports/export/pdf").status_code, 404)
+            self.assertEqual(saved.format, "pdf")
+        self.assertEqual(self.post("/reports/export/docx").status_code, 404)
         self.assertEqual(self.post("/reports/export/csv").status_code, 404)
 
     def test_role_boundaries_primary_pages_and_ten_second_toasts(self):
@@ -927,6 +957,24 @@ class SystemAcceptanceTests(unittest.TestCase):
                     action="PASSWORD_RESET_COMPLETED", user_id=user.id
                 ).count()
             )
+
+    def test_front_desk_services_and_queue_transitions(self):
+        self.auth("admin")
+        resident_id = self.ids["resident"]
+        self.assertEqual(self.client.get("/front-desk").status_code, 200)
+        with app.app_context():
+            queue = QueueEntry(queue_date=date.today(), queue_number="DQ-001", category="Document Request",
+                resident_id=resident_id, created_by=self.ids["admin"])
+            db.session.add(queue)
+            db.session.commit()
+            queue_id = queue.id
+        self.assertEqual(self.post(f"/front-desk/queue/{queue_id}/complete").status_code, 302)
+        self.assertEqual(self.post(f"/front-desk/queue/{queue_id}/call").status_code, 302)
+        self.assertEqual(self.post(f"/front-desk/queue/{queue_id}/serve").status_code, 302)
+        self.assertEqual(self.post(f"/front-desk/queue/{queue_id}/complete").status_code, 302)
+        with app.app_context():
+            self.assertEqual(db.session.get(User, resident_id).contact_number, "09171234567")
+            self.assertEqual(db.session.get(QueueEntry, queue_id).status, "Completed")
 
 
 if __name__ == "__main__":

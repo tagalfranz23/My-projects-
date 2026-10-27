@@ -20,9 +20,7 @@ ROLE_PERMISSIONS = {
         "schedule": {"view", "create", "edit", "confirm"},
         "notification": {"view", "create"}, "announcement": {"view"},
         "status": {"view_own"}, "work_summary": {"view"},
-        "front_desk": {"view", "manage"}, "concern": {"create", "view", "route"},
-        "resident_update": {"create", "view"}, "household": {"view", "manage"},
-        "referral": {"create", "view"},
+        "front_desk": {"view", "manage"},
     },
     "admin": {"*": {"*"}},
 }

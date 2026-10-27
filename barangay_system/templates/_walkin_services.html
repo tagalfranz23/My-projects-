@@ -1,0 +1,14 @@
+<section data-walkin-kind="event" hidden><h3>Event Approval</h3><div class="grid-2">
+<div class="field"><label>Event name<input name="event_name" maxlength="180" required></label></div>
+<div class="field"><label>Event category<select name="category_id" required><option value="">Choose category</option>{% for category in event_categories %}<option value="{{ category.id }}">{{ category.name }}</option>{% endfor %}</select></label></div>
+<div class="field"><label>Venue<select name="venue_id" required><option value="">Choose venue</option>{% for venue in venues %}<option value="{{ venue.id }}">{{ venue.name }}</option>{% endfor %}</select></label></div>
+<div class="field"><label>Event date<input name="proposed_date" type="date" required></label></div>
+<div class="field"><label>Start time<input name="proposed_start_time" type="time" required></label></div><div class="field"><label>End time<input name="proposed_end_time" type="time" required></label></div></div>
+<div class="field"><label>Event details<textarea name="description" required></textarea></label></div></section>
+<section data-walkin-kind="blotter" hidden><h3>Blotter Management</h3><p>Discuss this privately. Do not include complaint details on the printed queue slip.</p><div class="grid-2">
+<div class="field"><label>Respondent name<input name="respondent_name" maxlength="150" required></label></div><div class="field"><label>Respondent address (if known)<input name="respondent_address" maxlength="255"></label></div>
+<div class="field"><label>Type of incident<input name="incident_type" maxlength="120" required></label></div><div class="field"><label>Incident date and time<input name="incident_date" type="datetime-local" required></label></div><div class="field"><label>Incident location<input name="incident_location" maxlength="255" required></label></div></div>
+<div class="field"><label>What happened?<textarea name="narrative" maxlength="10000" required></textarea></label></div><div class="field"><label>Scanned supporting paper (optional)<input name="attachment" type="file" accept=".pdf,.png,.jpg,.jpeg"></label></div></section>
+<section data-walkin-kind="schedule" hidden><h3>Scheduling / Appointments</h3><p>Select this resident's existing transaction. If there is none, record their permit, event, or blotter request first.</p>
+<div class="field"><label>Transaction<select name="related_record" id="walkinRelated" required><option value="">Choose resident first</option></select></label><small id="walkinRelatedStatus" role="status"></small></div>
+<div class="field"><label>Requested appointment date and time<input name="scheduled_datetime" type="datetime-local" required></label></div><div class="field"><label>Appointment purpose<textarea name="purpose" maxlength="255" required></textarea></label></div></section>

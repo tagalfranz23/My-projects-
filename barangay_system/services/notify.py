@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from models import db, Notification, User
 
 VALID_CHANNELS={"sms","email","in_app"}
@@ -9,10 +9,10 @@ def create_notification(user_id,title,message,channel="in_app",related_type=None
     if not user: raise ValueError("Notification recipient not found")
     contact={"sms":user.contact_number,"email":user.email,"in_app":None}[channel]
     # SMS/email delivery is explicitly simulated until a provider is configured.
-    status="sent" if channel=="in_app" or contact else "failed"
+    status="sent" if channel=="in_app" else "simulated" if contact else "failed"
     item=Notification(user_id=user.id,recipient_user_id=user.id,recipient_contact=contact,title=title,
         message=message,channel=channel,status=status,related_type=related_type,related_id=related_id,
-        sent_at=datetime.utcnow() if status=="sent" else None)
+        sent_at=datetime.now(UTC).replace(tzinfo=None) if status=="sent" else None)
     db.session.add(item)
     if commit: db.session.commit()
     return item

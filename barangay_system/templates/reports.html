@@ -1,1 +1,34 @@
-{% extends 'base.html' %}{% block page_title %}6.0 Reports and Monitoring{% endblock %}{% block content %}<div class="page-head"><h1>System monitoring</h1><div class="export-actions"><form method="post" action="{{ url_for('report_export',fmt='docx') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-primary">Export Editable Microsoft Word (.docx)</button></form></div></div><p class="muted">Reports are exported as editable Microsoft Word documents. CSV and PDF exports are not available.</p><div class="grid-2">{% for module,values in metrics.items() %}<section class="card"><h2>{{ module|title }}</h2>{% for status,count in values.items() %}<div class="kv"><span>{{ status }}</span><strong>{{ count }}</strong></div>{% else %}<p>No data.</p>{% endfor %}</section>{% endfor %}</div>{% endblock %}
+﻿{% extends 'base.html' %}
+{% block page_title %}Reports &amp; Analytics{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Barangay Reports &amp; Analytics</h1><p class="muted">Active approved resident population and service summaries load automatically from the database.</p></div>
+  <form method="post" action="{{ url_for('report_export',fmt='pdf') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="btn btn-primary">Download PDF Report</button>
+  </form>
+</div>
+{% for category in report.categories %}
+<section aria-labelledby="report-category-{{ loop.index }}">
+  <h2 id="report-category-{{ loop.index }}">{{ category.title }}</h2>
+  <div class="grid-2">
+    {% for section in category.sections %}
+    <section class="card">
+      <h3>{{ section.title }}</h3>
+      {% if section.note %}<p class="muted">{{ section.note }}</p>{% endif %}
+      {% if section.rows %}
+      {% if section.kind!='table' and section.rows|map(attribute=1)|sum > 0 %}
+      <canvas class="report-chart" height="260" data-chart='{{ section|tojson }}' role="img" aria-label="{{ section.title }}; exact values in the following table"></canvas>
+      {% endif %}
+      <div class="table-wrap"><table class="data">
+        <thead><tr><th scope="col">Category / Metric</th><th scope="col">Value</th></tr></thead>
+        <tbody>{% for label,value in section.rows %}<tr><td>{{ label }}</td><td>{{ value }}{% if label in section.get('percentages', {}) %} ({{ '%.2f'|format(section.percentages[label]) }}%){% endif %}</td></tr>{% endfor %}</tbody>
+      </table></div>
+      {% else %}<p class="empty-state">No records available.</p>{% endif %}
+    </section>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+<script src="{{ url_for('static',filename='js/charts.js') }}"></script>
+{% endblock %}

@@ -16,6 +16,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
+from services.revision import local_display, payment_status
 
 
 DOCX_MIMETYPE = (
@@ -202,7 +203,7 @@ def generate_submission_acknowledgment(
             ("Permit Type", record.permit_type.name),
             ("Purpose", record.purpose),
             ("Fee at Submission", fee),
-            ("Requirements / What to Bring", record.permit_type.requirements),
+            ("Requirements submitted", "; ".join(f"{r.name}: {r.status}" for r in record.requirement_records) or "No requirement snapshots recorded"),
         ]
     elif kind == "event":
         owner = record.requester
@@ -243,7 +244,8 @@ def generate_submission_acknowledgment(
         [
             ("Submission Type", label),
             ("Resident / Applicant", owner.full_name),
-            ("Date and Time Submitted", submitted),
+            ("Date and Time Submitted (Asia/Manila)", local_display(submitted)),
+            ("Payment Status", payment_status(record) if kind in {"permit", "event"} else "Not Required"),
             ("Current Status", getattr(record, "status", None)),
             *details,
         ],
@@ -254,7 +256,7 @@ def generate_submission_acknowledgment(
         "Received Confirmation",
         (
             f"Barangay Minante 1 successfully received this submission on "
-            f"{_text(submitted)}. Keep this acknowledgment and reference number "
+            f"{local_display(submitted)} (Asia/Manila). Keep this acknowledgment and reference number "
             "for tracking and follow-up."
         ),
     )
@@ -298,19 +300,27 @@ def generate_submission_acknowledgment(
 def generate_walkin_claim_stub(application, queue_entry, barangay_name="Barangay Minante 1"):
     """Generate a filing/queue stub; it is never a payment receipt or Permit."""
     document = _prepare_document(
-        f"Walk-in Claim Stub {application.reference_no}",
+        f"Walk-in Transaction Acknowledgment {application.reference_no}",
         "Walk-in filing and queue reference",
         barangay_name,
     )
-    _add_barangay_header(document, barangay_name, "Cauayan City, Isabela", "WALK-IN CLAIM STUB")
+    _add_barangay_header(document, barangay_name, "Cauayan City, Isabela", "WALK-IN TRANSACTION ACKNOWLEDGMENT")
     _add_reference_box(document, application.reference_no)
     _add_details_table(document, [
         ("Resident", application.applicant.full_name),
+        ("Resident ID", application.applicant_id),
+        ("Date and Time (Asia/Manila)", local_display(application.created_at)),
         ("Service", application.permit_type.name),
         ("Queue Number", queue_entry.queue_number),
         ("Fee at Submission", _money(application.fee_at_submission)),
         ("Filing Status", application.status),
-        ("Important", "This is a claim stub and proof of filing. It is not a payment receipt or approved Permit."),
+        ("Payment Status", payment_status(application)),
+        ("Requirements submitted", "; ".join(f"{r.name}: {r.status}" for r in application.requirement_records) or "No configured requirements"),
+        ("Estimated processing time", application.permit_type.processing_time or "Contact the Barangay office"),
+        ("Claim / reference code", application.reference_no),
+        ("Assisted by", queue_entry.creator.full_name),
+        ("Next steps", "Keep this acknowledgment for follow-up. Wait for requirements review and approval; pay only when instructed. Present identification when claiming."),
+        ("Important", "This acknowledgment confirms that Barangay Minante 1 received and recorded this request. It is not proof of final approval or payment unless specifically indicated."),
     ])
     return _to_stream(document)
 
@@ -382,7 +392,8 @@ def generate_approved_permit_document(
     name = document.add_paragraph()
     name.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     name.add_run(_text(signatory_name, "Authorized official")).bold = True
-    name.add_run("\nElectronic signature applied by the authorized Barangay official.")
+    if getattr(application, "is_signed", False):
+        name.add_run("\nElectronic signature applied by the authorized Barangay official.")
     for row in signatures.rows:
         for cell in row.cells:
             cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER

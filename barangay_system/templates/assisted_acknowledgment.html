@@ -1,0 +1,8 @@
+{% extends 'base.html' %}{% block page_title %}Walk-in Acknowledgment{% endblock %}
+{% block content %}
+<section class="card"><h1>Barangay Minante 1</h1><h2>Walk-in Transaction Acknowledgment</h2>
+<dl><dt>Resident</dt><dd>{{ queue.resident.full_name }}</dd><dt>Resident number</dt><dd>{{ queue.resident_id }}</dd><dt>Service</dt><dd>{{ queue.category }}</dd><dt>Reference number</dt><dd class="mono">{{ reference }}</dd><dt>Queue number</dt><dd class="mono">{{ queue.queue_number }}</dd><dt>Request status</dt><dd>{{ status }}</dd><dt>Recorded</dt><dd>{{ queue.created_at|local_time }}</dd><dt>Assisted by</dt><dd>{{ queue.creator.full_name }}</dd></dl>
+<p>Keep this slip. Bring this reference and identification to the Barangay front desk to ask about your request or arrange a follow-up. No mobile phone or online account is required.</p><p>This acknowledgment confirms receipt only. It is not a permit, approval, or final Barangay decision. Completing front desk assistance does not approve the request.</p>
+<div class="inline-actions no-print"><button class="btn btn-primary" type="button" onclick="window.print()">Print Acknowledgment</button><a class="btn btn-outline" href="{{ url_for('front_desk',resident_id=queue.resident_id) }}">Continue Assisting Resident</a></div></section>
+<style>@media print{.sidebar,.app-header,.no-print,.flash,.skip-link{display:none!important}.app-main{margin:0!important}main.shell{padding:0!important}.card{box-shadow:none!important;border:0!important}}</style>
+{% endblock %}

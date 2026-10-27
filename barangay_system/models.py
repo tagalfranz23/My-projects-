@@ -7,7 +7,7 @@ New workflows use configured categories, venues, fee snapshots and reservations.
 import hashlib
 import secrets
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import Index, event
@@ -34,11 +34,11 @@ def configure_sqlite_connection(dbapi_connection, _connection_record):
 
 
 def utcnow():
-    return datetime.utcnow()
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def make_reference(prefix):
-    return f"{prefix}-{utcnow().year}-{secrets.randbelow(1000000):06d}"
+    return f"{prefix}-{utcnow().year}-{secrets.token_hex(8).upper()}"
 
 
 class TimestampMixin:
@@ -53,6 +53,7 @@ class User(db.Model, TimestampMixin):
 
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    online_access_enabled = db.Column(db.Boolean, nullable=False, default=True)
     password_hash = db.Column(db.String(255), nullable=False)
     role = db.Column(
         db.String(20), nullable=False, default="resident", index=True
@@ -132,6 +133,12 @@ class ResidentProfile(db.Model, TimestampMixin):
     years_of_residency = db.Column(db.Integer)
     occupation = db.Column(db.String(150))
     is_household_head = db.Column(db.Boolean, nullable=False, default=False)
+    has_disability = db.Column(db.Boolean)
+    disability_declined = db.Column(db.Boolean, nullable=False, default=False)
+    disability_type = db.Column(db.String(50))
+    disability_other = db.Column(db.String(300))
+    family_members = db.relationship("ResidentFamilyMember", back_populates="head_profile",
+                                    order_by="ResidentFamilyMember.id")
     household_number = db.Column(db.String(80))
     emergency_contact_name = db.Column(db.String(150))
     emergency_contact_relationship = db.Column(db.String(80))
@@ -587,6 +594,11 @@ class Announcement(db.Model, TimestampMixin):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(180), nullable=False)
     body = db.Column(db.Text, nullable=False)
+    category = db.Column(db.String(60), nullable=False, default="General Advisory")
+    publish_start_at = db.Column(db.DateTime, index=True)
+    expired_at = db.Column(db.DateTime)
+    program_id = db.Column(db.Integer, db.ForeignKey("community_programs.id"))
+    program = db.relationship("CommunityProgram")
     is_published = db.Column(db.Boolean, nullable=False, default=True, index=True)
     status = db.Column(db.String(20), nullable=False, default="Draft", index=True)
     approved_by = db.Column(db.Integer, db.ForeignKey("users.id"))
@@ -605,6 +617,8 @@ class QueueEntry(db.Model, TimestampMixin):
     queue_date = db.Column(db.Date, nullable=False, index=True)
     queue_number = db.Column(db.String(30), nullable=False)
     category = db.Column(db.String(80), nullable=False)
+    related_type = db.Column(db.String(20))
+    related_id = db.Column(db.Integer)
     resident_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     permit_application_id = db.Column(db.Integer, db.ForeignKey("permit_applications.id"), index=True)
     status = db.Column(db.String(20), nullable=False, default="Waiting", index=True)
@@ -686,6 +700,29 @@ class HouseholdMember(db.Model, TimestampMixin):
     resident = db.relationship("User", foreign_keys=[resident_id])
 
 
+class ResidentFamilyMember(db.Model, TimestampMixin):
+    """Confidential family information; these members have no login accounts."""
+    __tablename__ = "resident_family_members"
+    __table_args__ = (
+        db.UniqueConstraint("head_profile_id", "member_key"),
+        db.CheckConstraint("age >= 0 AND age <= 120"),
+        db.CheckConstraint("gender IN ('Male', 'Female')"),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    head_profile_id = db.Column(db.Integer, db.ForeignKey("resident_profiles.id"), nullable=False, index=True)
+    household_id = db.Column(db.Integer, db.ForeignKey("households.id"), index=True)
+    full_name = db.Column(db.String(150), nullable=False)
+    age = db.Column(db.Integer, nullable=True)
+    gender = db.Column(db.String(6), nullable=True)
+    date_of_birth = db.Column(db.Date)
+    relationship = db.Column(db.String(80))
+    member_key = db.Column(db.String(64), nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    updated_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    head_profile = db.relationship("ResidentProfile", back_populates="family_members")
+    household = db.relationship("Household")
+
+
 class AssistanceReferral(db.Model, TimestampMixin):
     __tablename__ = "assistance_referrals"
     id = db.Column(db.Integer, primary_key=True)
@@ -701,6 +738,99 @@ class AssistanceReferral(db.Model, TimestampMixin):
     creator = db.relationship("User", foreign_keys=[created_by])
 
 
+class PaymentAuthority(db.Model):
+    __tablename__ = "payment_authorities"
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), primary_key=True)
+    granted_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+
+
+class Payment(db.Model, TimestampMixin):
+    __tablename__ = "payments"
+    id = db.Column(db.Integer, primary_key=True)
+    payment_reference = db.Column(db.String(40), unique=True, nullable=False, default=lambda: make_reference("PAY"))
+    permit_id = db.Column(db.Integer, db.ForeignKey("permit_applications.id"), unique=True)
+    event_id = db.Column(db.Integer, db.ForeignKey("event_requests.id"), unique=True)
+    resident_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    fee_snapshot = db.Column(db.Numeric(10, 2), nullable=False)
+    amount_paid = db.Column(db.Numeric(10, 2), nullable=False)
+    status = db.Column(db.String(30), nullable=False)
+    payment_method = db.Column(db.String(60))
+    recorded_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    paid_at = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
+    notes = db.Column(db.Text)
+    resident = db.relationship("User", foreign_keys=[resident_id])
+    recorder = db.relationship("User", foreign_keys=[recorded_by])
+    permit = db.relationship("PermitApplication", backref=db.backref("payment", uselist=False))
+    event = db.relationship("EventRequest", backref=db.backref("payment", uselist=False))
+    __table_args__ = (
+        db.CheckConstraint("(permit_id IS NOT NULL AND event_id IS NULL) OR (event_id IS NOT NULL AND permit_id IS NULL)"),
+        db.CheckConstraint("status IN ('Paid', 'Waived')"),
+        db.CheckConstraint("fee_snapshot > 0 AND ((status = 'Paid' AND amount_paid = fee_snapshot) OR (status = 'Waived' AND amount_paid = 0))"),
+    )
+
+
+class CommunityProgram(db.Model, TimestampMixin):
+    __tablename__ = "community_programs"
+    id = db.Column(db.Integer, primary_key=True)
+    program_type = db.Column(db.String(30), nullable=False)
+    title = db.Column(db.String(180), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    provider = db.Column(db.String(180))
+    assistance_type = db.Column(db.String(120))
+    eligibility = db.Column(db.Text, nullable=False)
+    target_categories = db.Column(db.Text)
+    instructions = db.Column(db.Text)
+    requirements_json = db.Column(db.Text, nullable=False, default="[]")
+    application_start = db.Column(db.DateTime, nullable=False, index=True)
+    application_deadline = db.Column(db.DateTime, nullable=False, index=True)
+    distribution_date = db.Column(db.DateTime)
+    slots = db.Column(db.Integer)
+    claim_rule = db.Column(db.String(30), nullable=False, default="Per Resident")
+    applications_enabled = db.Column(db.Boolean, nullable=False, default=True)
+    status = db.Column(db.String(30), nullable=False, default="Draft", index=True)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    approved_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    published_at = db.Column(db.DateTime)
+    __table_args__ = (db.CheckConstraint("program_type IN ('Scholarship', 'Ayuda')"),
+                      db.CheckConstraint("status IN ('Draft', 'Published', 'Closed')"),
+                      db.CheckConstraint("application_deadline > application_start"),
+                      db.CheckConstraint("claim_rule IN ('Per Resident', 'Per Household', 'Repeatable')"),
+                      db.CheckConstraint("slots IS NULL OR slots > 0"),)
+
+
+class ProgramApplication(db.Model, TimestampMixin):
+    __tablename__ = "program_applications"
+    id = db.Column(db.Integer, primary_key=True)
+    reference_no = db.Column(db.String(40), unique=True, nullable=False, default=lambda: make_reference("APP"))
+    program_id = db.Column(db.Integer, db.ForeignKey("community_programs.id"), nullable=False, index=True)
+    resident_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    household_id = db.Column(db.Integer, db.ForeignKey("households.id"))
+    claim_key = db.Column(db.String(80))
+    status = db.Column(db.String(30), nullable=False, default="Submitted", index=True)
+    requirements_json = db.Column(db.Text, nullable=False, default="[]")
+    encoded_by = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    reviewed_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    reviewed_at = db.Column(db.DateTime)
+    released_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    released_at = db.Column(db.DateTime)
+    review_note = db.Column(db.Text)
+    program = db.relationship("CommunityProgram")
+    resident = db.relationship("User", foreign_keys=[resident_id])
+    __table_args__ = (db.UniqueConstraint("program_id", "claim_key"),
+        db.CheckConstraint("status IN ('Submitted', 'Under Review', 'Needs Requirements', 'Qualified', 'Not Qualified', 'Approved', 'Waitlisted', 'Completed')"),)
+
+
+class ProgramApplicationHistory(db.Model):
+    __tablename__ = "program_application_history"
+    id = db.Column(db.Integer, primary_key=True)
+    application_id = db.Column(db.Integer, db.ForeignKey("program_applications.id"), nullable=False, index=True)
+    actor_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    status = db.Column(db.String(30), nullable=False)
+    requirements_json = db.Column(db.Text, nullable=False)
+    note = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
 class ResidentFeedback(db.Model, TimestampMixin):
     __tablename__ = "resident_feedback"
     __table_args__ = (db.UniqueConstraint("resident_id", "permit_application_id"),)
@@ -711,6 +841,16 @@ class ResidentFeedback(db.Model, TimestampMixin):
     comment = db.Column(db.Text)
     resident = db.relationship("User", foreign_keys=[resident_id])
     permit_application = db.relationship("PermitApplication")
+
+
+# These indexes match the paginated request lists and date-range report queries.
+Index("ix_permit_owner_date", PermitApplication.applicant_id, PermitApplication.application_date)
+Index("ix_permit_created", PermitApplication.created_at)
+Index("ix_event_owner_created", EventRequest.requester_id, EventRequest.created_at)
+Index("ix_event_created", EventRequest.created_at)
+Index("ix_blotter_owner_filed", BlotterCase.complainant_id, BlotterCase.filed_date)
+Index("ix_notification_owner_created", Notification.user_id, Notification.created_at)
+Index("ix_program_application_created", ProgramApplication.program_id, ProgramApplication.created_at)
 
 
 def log_activity(

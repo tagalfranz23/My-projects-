@@ -1,0 +1,12 @@
+<link rel="stylesheet" href="{{ url_for('static',filename='css/event-calendar.css') }}">
+<section class="card event-calendar" data-event-calendar data-url="{{ url_for('event_calendar_availability') }}" aria-labelledby="eventCalendarHeading">
+<h2 id="eventCalendarHeading">Event Availability Calendar</h2>
+<p>Select a venue and, for an exact availability check, a start and end time. Pending requests reserve their slots under the existing booking rules. Other times on the same date may remain available.</p>
+<div class="form-row"><div class="field"><label for="calendarVenue">Venue</label><select id="calendarVenue">{% for venue in venues %}<option value="{{ venue.id }}">{{ venue.name }}</option>{% endfor %}</select></div><div class="field"><label for="calendarStart">Check start time</label><input id="calendarStart" type="time"></div><div class="field"><label for="calendarEnd">Check end time</label><input id="calendarEnd" type="time"></div></div>
+<div class="page-head"><button type="button" class="btn btn-outline" data-calendar-prev aria-label="Previous month">Previous</button><h3 data-calendar-month></h3><button type="button" class="btn btn-outline" data-calendar-next aria-label="Next month">Next</button><button type="button" class="btn btn-outline" data-calendar-refresh>Refresh</button></div>
+<p class="calendar-legend"><span class="calendar-key available">Available</span><span class="calendar-key partial">Some slots reserved</span><span class="calendar-key pending">Pending reservation</span><span class="calendar-key booked">Booked</span><span class="calendar-key unavailable">Unavailable / past</span></p>
+<p data-calendar-state role="status">Loading availability…</p>
+<div class="calendar-week" aria-hidden="true">{% for day in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] %}<span>{{ day }}</span>{% endfor %}</div><div class="calendar-days" data-calendar-days></div>
+<section class="calendar-details" aria-live="polite"><h3 data-calendar-selected>Select a date</h3><p data-calendar-message>Dates are checked separately for the selected venue and time. The server checks again before saving.</p><div data-calendar-details></div></section>
+</section>
+<script src="{{ url_for('static',filename='js/event-calendar.js') }}" defer></script>

@@ -1,0 +1,1 @@
+{% if page.pages > 1 %}<nav aria-label="Pagination" class="inline-actions">{% if page.has_prev %}<a class="btn btn-outline" href="{{ pagination_url(page.prev_num) }}">Previous</a>{% endif %}<span>Page {{ page.page }} of {{ page.pages }}</span>{% if page.has_next %}<a class="btn btn-outline" href="{{ pagination_url(page.next_num) }}">Next</a>{% endif %}</nav>{% endif %}

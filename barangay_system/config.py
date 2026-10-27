@@ -42,6 +42,7 @@ class Config:
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {
+        "hide_parameters": True,
         "connect_args": {"timeout": 30, "check_same_thread": False},
         "pool_pre_ping": True,
     }

@@ -1,15 +1,78 @@
 {% extends 'base.html' %}
 {% block page_title %}Resident Registration Review{% endblock %}
 {% block content %}
-<div class="page-head"><div><span class="eyebrow">Administrator verification</span><h1>{{ record.full_name }}</h1><p class="muted">Review sensitive information only for this authorized account-verification duty.</p></div>{% if profile %}<span class="badge badge-{{ profile.approval_status|lower }}">● {{ profile.approval_status }}</span>{% endif %}</div>
-{% if not profile %}<div class="card empty-state">This account has no Resident registration profile.</div>{% else %}
-<div class="grid-2">
-  <section class="card"><h2>Personal Information</h2><div class="kv"><span>Full Name</span><strong>{{ record.full_name }}</strong></div><div class="kv"><span>Date of Birth</span><strong>{{ profile.date_of_birth or 'Not recorded' }}</strong></div><div class="kv"><span>Sex</span><strong>{{ profile.sex or 'Not recorded' }}</strong></div><div class="kv"><span>Civil Status</span><strong>{{ profile.civil_status or 'Not recorded' }}</strong></div><div class="kv"><span>Contact Number</span><strong>{{ record.contact_number or 'Not recorded' }}</strong></div><div class="kv"><span>Email</span><strong>{{ record.email or 'Not recorded' }}</strong></div></section>
-  <section class="card"><h2>Residency Information</h2><div class="kv"><span>House No. / Street</span><strong>{{ profile.house_number_street or 'Not recorded' }}</strong></div><div class="kv"><span>Purok / Sitio / Zone</span><strong>{{ profile.purok_zone or 'Not recorded' }}</strong></div><div class="kv"><span>Resident Type</span><strong>{{ profile.resident_type.name if profile.resident_type else 'Not recorded' }}</strong></div>{% if profile.resident_type_other %}<div class="kv"><span>Other Resident Type</span><strong>{{ profile.resident_type_other }}</strong></div>{% endif %}<div class="kv"><span>Residency Status</span><strong>{{ profile.residency_status or 'Not recorded' }}</strong></div><div class="kv"><span>Years of Residency</span><strong>{{ profile.years_of_residency if profile.years_of_residency is not none else 'Not recorded' }}</strong></div><div class="kv"><span>Occupation</span><strong>{{ profile.occupation or 'Not recorded' }}</strong></div><div class="kv"><span>Household</span><strong>{{ profile.household_number or 'Not recorded' }}{% if profile.is_household_head %} — Head of household{% endif %}</strong></div></section>
-  <section class="card"><h2>Emergency Information</h2><p class="muted">Restricted; exclude from ordinary reports.</p><div class="kv"><span>Contact Person</span><strong>{{ profile.emergency_contact_name or 'Not recorded' }}</strong></div><div class="kv"><span>Relationship</span><strong>{{ profile.emergency_contact_relationship or 'Not recorded' }}</strong></div><div class="kv"><span>Contact Number</span><strong>{{ profile.emergency_contact_number or 'Not recorded' }}</strong></div></section>
-  <section class="card"><h2>Identity Verification</h2><div class="kv"><span>Valid ID Type</span><strong>{{ profile.accepted_id_type.name if profile.accepted_id_type else 'Not recorded' }}</strong></div>{% if profile.valid_id_type_other %}<div class="kv"><span>Other ID Type</span><strong>{{ profile.valid_id_type_other }}</strong></div>{% endif %}<div class="kv"><span>ID Number</span><strong>{{ profile.valid_id_number or 'Not recorded' }}</strong></div><div class="kv"><span>ID Verification Status</span><strong>{{ profile.id_verification_status }}</strong></div>{% if profile.valid_id_file_path %}<a class="btn btn-outline" href="{{ url_for('resident_identification_document',user_id=record.id) }}">View Uploaded Valid ID</a>{% endif %}{% if profile.id_rejection_reason %}<p class="flash flash-warning">Correction reason: {{ profile.id_rejection_reason }}</p>{% endif %}<form method="post" action="{{ url_for('user_verification',record_id=record.id,kind='id') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="field"><label>ID rejection / correction reason</label><textarea name="reason" placeholder="Use a factual, respectful reason."></textarea></div><div class="inline-actions"><button class="btn btn-primary" type="submit" name="action" value="verify">Verify ID</button><button class="btn btn-danger" type="submit" name="action" value="reject">Reject ID / Request Correction</button></div></form></section>
-  <section class="card"><h2>Address Verification</h2><div class="kv"><span>Address Verification Status</span><strong>{{ profile.address_verification_status }}</strong></div>{% if profile.address_rejection_reason %}<p class="flash flash-warning">Correction reason: {{ profile.address_rejection_reason }}</p>{% endif %}<form method="post" action="{{ url_for('user_verification',record_id=record.id,kind='address') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="field"><label>Address rejection / correction reason</label><textarea name="reason" placeholder="Use a factual, respectful reason."></textarea></div><div class="inline-actions"><button class="btn btn-primary" type="submit" name="action" value="verify">Verify Address</button><button class="btn btn-danger" type="submit" name="action" value="reject">Reject / Request Correction</button></div></form></section>
+<div class="page-head">
+  <div><span class="eyebrow">Administrator verification</span><h1>{{ record.full_name }}</h1><p class="muted">Review each pending verification once. Finalized checks cannot be repeated.</p></div>
+  {% if profile %}<span class="badge badge-{{ profile.approval_status|lower }}">{{ profile.approval_status }}</span>{% endif %}
 </div>
-{% if record.role=='resident' %}<section class="card"><h2>Final Account Decision</h2>{% if approval_outstanding %}<div class="flash flash-warning">Account approval is unavailable until {{ approval_outstanding|join(' and ') }} {{ 'is' if approval_outstanding|length == 1 else 'are' }} Verified.</div>{% endif %}<form method="post" action="{{ url_for('user_approval',record_id=record.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="field"><label for="remarks">Internal final decision remarks</label><textarea id="remarks" name="remarks">{{ profile.approval_remarks or '' }}</textarea></div><div class="inline-actions"><button class="btn btn-primary" name="action" value="approve" type="submit" {{ 'disabled' if approval_outstanding }}>Approve Account</button><button class="btn btn-danger" name="action" value="reject" type="submit">Reject Account</button><a class="btn btn-ghost" href="{{ url_for('users') }}">Back to users</a></div></form></section>{% endif %}
+{% if not profile %}
+  <div class="card empty-state">This account has no Resident registration profile.</div>
+{% else %}
+<div class="grid-2">
+  <section class="card">
+    <h2>Family and Disability Information</h2>
+    <p>Head of Family: <strong>{{ 'Yes' if profile.is_household_head else 'No' }}</strong></p>
+    <p>Disability: <strong>{{ 'Prefer not to say' if profile.disability_declined else 'Not recorded' if profile.has_disability is none else 'Yes' if profile.has_disability else 'No' }}</strong>{% if profile.has_disability %} — {{ profile.disability_type or 'Type not specified' }}{% if profile.disability_type=='Other' and profile.disability_other %}: {{ profile.disability_other }}{% endif %}{% endif %}</p>
+    <div class="table-wrap"><table class="data"><thead><tr><th>Family Member</th><th>Date of Birth</th><th>Relationship to Head</th></tr></thead><tbody>{% for member in profile.family_members %}<tr><td>{{ member.full_name }}</td><td>{{ member.date_of_birth or 'Not recorded' }}</td><td>{{ member.relationship or 'Not recorded' }}</td></tr>{% else %}<tr><td colspan="3">No family members recorded.</td></tr>{% endfor %}</tbody></table></div>
+  </section>
+  <section class="card">
+    <h2>Personal Information</h2>
+    <p><a class="btn btn-outline" href="{{ url_for('resident_information',resident_id=record.id) }}">Family and Disability Information</a></p>
+    <div class="kv"><span>Full Name</span><strong>{{ record.full_name }}</strong></div>
+    <div class="kv"><span>Date of Birth</span><strong>{{ profile.date_of_birth or 'Not recorded' }}</strong></div>
+    <div class="kv"><span>Sex / Civil Status</span><strong>{{ profile.sex or 'Not recorded' }} / {{ profile.civil_status or 'Not recorded' }}</strong></div>
+    <div class="kv"><span>Contact</span><strong>{{ record.contact_number or 'Not recorded' }}</strong></div>
+    <div class="kv"><span>Email</span><strong>{{ record.email or 'Not recorded' }}</strong></div>
+  </section>
+  <section class="card">
+    <h2>Address Verification</h2>
+    <div class="kv"><span>House No. / Street</span><strong>{{ profile.house_number_street or 'Not recorded' }}</strong></div>
+    <div class="kv"><span>Purok / Sitio / Zone</span><strong>{{ profile.purok_zone or 'Not recorded' }}</strong></div>
+    <div class="kv"><span>Resident Type</span><strong>{{ profile.resident_type.name if profile.resident_type else 'Not recorded' }}</strong></div>
+    <div class="kv"><span>Residency Status</span><strong>{{ profile.residency_status or 'Not recorded' }}</strong></div>
+    <div class="kv"><span>Address status</span><strong>{{ profile.address_verification_status }}</strong></div>
+    {% if profile.address_verification_status == 'Verified' %}
+      <p class="flash flash-success">Address verified{% if profile.address_verifier %} by {{ profile.address_verifier.full_name }}{% endif %}{% if profile.address_verified_at %} on {{ profile.address_verified_at.strftime('%b %d, %Y %I:%M %p') }}{% endif %}.</p>
+    {% elif profile.address_verification_status == 'Pending Verification' %}
+      <form method="post" action="{{ url_for('user_verification', record_id=record.id, kind='address') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="verification_action" value="verify"><button class="btn btn-primary" type="submit">Verify Address</button></form>
+      <form method="post" action="{{ url_for('user_verification', record_id=record.id, kind='address') }}" class="stack-top"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="verification_action" value="reject"><div class="field"><label>Correction reason</label><textarea name="reason" required></textarea></div><button class="btn btn-danger" type="submit">Reject / Request Correction</button></form>
+    {% else %}
+      <p class="flash flash-warning">Address verification was finalized as {{ profile.address_verification_status }}{% if profile.address_rejection_reason %}: {{ profile.address_rejection_reason }}{% endif %}.</p>
+    {% endif %}
+  </section>
+  <section class="card">
+    <h2>Identity Verification</h2>
+    <div class="kv"><span>Valid ID Type</span><strong>{{ profile.accepted_id_type.name if profile.accepted_id_type else 'Not recorded' }}</strong></div>
+    <div class="kv"><span>ID Number</span><strong>{{ profile.valid_id_number or 'Not recorded' }}</strong></div>
+    <div class="kv"><span>ID status</span><strong>{{ profile.id_verification_status }}</strong></div>
+    {% if profile.valid_id_file_path %}
+      {% if id_preview_is_image %}
+        <img class="id-preview" src="{{ url_for('resident_identification_document', user_id=record.id, inline=1) }}" alt="Uploaded valid ID for {{ record.full_name }}">
+      {% else %}
+        <div class="empty-state stack-top">This ID is a document file and cannot be safely displayed as an image preview. <a href="{{ url_for('resident_identification_document', user_id=record.id, inline=1) }}" target="_blank" rel="noopener">Open Valid ID in a new tab</a></div>
+      {% endif %}
+      <p><a class="btn btn-outline" href="{{ url_for('resident_identification_document', user_id=record.id) }}">Download Valid ID</a></p>
+    {% else %}<p class="flash flash-warning">No valid ID file has been uploaded.</p>{% endif %}
+    {% if profile.id_verification_status == 'Verified' %}
+      <p class="flash flash-success">ID verified{% if profile.id_verifier %} by {{ profile.id_verifier.full_name }}{% endif %}{% if profile.id_verified_at %} on {{ profile.id_verified_at.strftime('%b %d, %Y %I:%M %p') }}{% endif %}.</p>
+    {% elif profile.id_verification_status == 'Pending Verification' %}
+      <form method="post" action="{{ url_for('user_verification', record_id=record.id, kind='id') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="verification_action" value="verify"><button class="btn btn-primary" type="submit" {% if not profile.valid_id_file_path %}disabled{% endif %}>Verify ID</button></form>
+      <form method="post" action="{{ url_for('user_verification', record_id=record.id, kind='id') }}" class="stack-top"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="verification_action" value="reject"><div class="field"><label>Correction reason</label><textarea name="reason" required></textarea></div><button class="btn btn-danger" type="submit">Reject ID / Request Correction</button></form>
+    {% else %}
+      <p class="flash flash-warning">ID verification was finalized as {{ profile.id_verification_status }}{% if profile.id_rejection_reason %}: {{ profile.id_rejection_reason }}{% endif %}.</p>
+    {% endif %}
+  </section>
+</div>
+{% if record.role == 'resident' %}
+<section class="card stack-top"><h2>Final Account Decision</h2>
+  {% if profile.approval_status == 'Pending' %}
+    {% if approval_outstanding %}<p class="flash flash-warning">Approval requires {{ approval_outstanding|join(' and ') }}.</p>{% endif %}
+    <form method="post" action="{{ url_for('user_approval', record_id=record.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="approval_action" value="approve"><div class="field"><label>Internal remarks (optional)</label><textarea name="remarks"></textarea></div><button class="btn btn-primary" type="submit" {% if approval_outstanding %}disabled{% endif %}>Approve Account</button></form>
+    <form method="post" action="{{ url_for('user_approval', record_id=record.id) }}" class="stack-top"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="approval_action" value="reject"><div class="field"><label>Internal rejection remarks (optional)</label><textarea name="remarks"></textarea></div><button class="btn btn-danger" type="submit">Reject Account</button></form>
+  {% else %}
+    <p class="flash {% if profile.approval_status == 'Approved' %}flash-success{% else %}flash-warning{% endif %}">Account {{ profile.approval_status|lower }}{% if profile.reviewer %} by {{ profile.reviewer.full_name }}{% endif %}{% if profile.reviewed_at %} on {{ profile.reviewed_at.strftime('%b %d, %Y %I:%M %p') }}{% endif %}.{% if profile.approval_remarks %} Remarks: {{ profile.approval_remarks }}{% endif %}</p>
+  {% endif %}
+</section>
+{% endif %}
 {% endif %}
 {% endblock %}

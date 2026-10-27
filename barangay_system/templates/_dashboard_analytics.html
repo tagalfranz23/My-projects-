@@ -1,0 +1,44 @@
+<div data-analytics-content>
+  <nav class="analytics-overview" aria-label="Analytics modules">
+    {% for module in analytics.modules %}
+    <a class="analytics-overview-card" href="#analytics-{{ module.key }}">
+      <span>{{ module.label }}</span>
+      <strong>{{ '{:,}'.format(module.total) }}</strong>
+      <small>View analytics <span aria-hidden="true">↗</span></small>
+    </a>
+    {% endfor %}
+  </nav>
+  {% for module in analytics.modules %}
+  <section class="analytics-module" id="analytics-{{ module.key }}" aria-labelledby="analytics-{{ module.key }}-heading">
+    <div class="analytics-module-heading">
+      <div><span class="eyebrow">{{ '%02d'|format(loop.index) }} · Service monitoring</span><h3 id="analytics-{{ module.key }}-heading">{{ module.heading }}</h3></div>
+      <span class="analytics-period">Totals: all time</span>
+    </div>
+    <div class="analytics-metrics">
+      {% for metric in module.metrics %}
+      <div class="analytics-metric"><span>{{ metric.label }}</span><strong>{{ '{:,}'.format(metric.value) }}</strong></div>
+      {% endfor %}
+    </div>
+    <div class="analytics-chart-grid">
+      {% for chart in module.charts %}
+      <article class="analytics-chart-card{% if loop.index > 2 %} analytics-chart-wide{% endif %}">
+        <h4>{{ chart.title }}</h4>
+        <p class="analytics-chart-caption">{{ analytics.period ~ ' · Submission month (Asia/Manila)' if chart.kind=='line' else 'All recorded requests · Current status' if loop.index==1 else 'All recorded requests' }}</p>
+        {% if chart.has_data %}
+        <div class="analytics-plot"><canvas class="report-chart" height="280" data-chart='{{ chart|tojson }}' role="img" aria-label="{{ chart.title }}; exact values in the data table below"></canvas></div>
+        {% else %}
+        <div class="analytics-empty"><span aria-hidden="true">—</span><strong>No {{ module.label|lower }}{{ ' in this period' if chart.kind=='line' else ' yet' }}</strong><p>Recorded submissions will appear here automatically.</p></div>
+        {% endif %}
+        {% if chart.rows %}
+        <details class="analytics-data" id="data-{{ chart.id }}"><summary>View exact {{ 'monthly' if chart.kind=='line' else 'category' }} counts</summary>
+          <div class="table-wrap"><table class="data"><caption class="analytics-sr-only">{{ chart.title }}</caption><thead><tr><th scope="col">{{ 'Month' if chart.kind=='line' else 'Status' if loop.index==1 else 'Type / Category' }}</th><th scope="col">Count</th></tr></thead><tbody>
+          {% for label,value in chart.rows %}<tr><th scope="row">{{ label }}</th><td>{{ '{:,}'.format(value) }}</td></tr>{% endfor %}
+          </tbody></table></div>
+        </details>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+</div>
